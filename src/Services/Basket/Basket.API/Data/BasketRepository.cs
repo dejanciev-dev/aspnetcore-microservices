@@ -5,22 +5,25 @@ namespace Basket.API.Data;
 
 public interface IBasketRepository
 {
-    ShoppingCart Get(string userName);
-    ShoppingCart Save(ShoppingCart cart);
-    void Delete(string userName);
+    Task<ShoppingCart> GetAsync(string userName, CancellationToken ct = default);
+    Task<ShoppingCart> SaveAsync(ShoppingCart cart, CancellationToken ct = default);
+    Task DeleteAsync(string userName, CancellationToken ct = default);
 }
 
-/// <summary>
-/// In-memory basket store. In production this is a natural fit for Redis
-/// (key = user name, value = serialized cart, sliding expiry).
-/// </summary>
+/// <summary>In-memory basket store used when no Redis connection is configured.</summary>
 public sealed class InMemoryBasketRepository : IBasketRepository
 {
     private readonly ConcurrentDictionary<string, ShoppingCart> _carts = new(StringComparer.OrdinalIgnoreCase);
 
-    public ShoppingCart Get(string userName) => _carts.GetValueOrDefault(userName) ?? ShoppingCart.Empty(userName);
+    public Task<ShoppingCart> GetAsync(string userName, CancellationToken ct = default) =>
+        Task.FromResult(_carts.GetValueOrDefault(userName) ?? ShoppingCart.Empty(userName));
 
-    public ShoppingCart Save(ShoppingCart cart) => _carts[cart.UserName] = cart;
+    public Task<ShoppingCart> SaveAsync(ShoppingCart cart, CancellationToken ct = default) =>
+        Task.FromResult(_carts[cart.UserName] = cart);
 
-    public void Delete(string userName) => _carts.TryRemove(userName, out _);
+    public Task DeleteAsync(string userName, CancellationToken ct = default)
+    {
+        _carts.TryRemove(userName, out _);
+        return Task.CompletedTask;
+    }
 }

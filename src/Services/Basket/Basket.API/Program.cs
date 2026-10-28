@@ -7,7 +7,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 builder.Services.AddValidation();
-builder.Services.AddSingleton<IBasketRepository, InMemoryBasketRepository>();
+
+// Redis when a connection string is configured (Aspire, docker-compose); in-memory otherwise.
+if (builder.Configuration.GetConnectionString("redis") is not null)
+{
+    // Aspire integration: registers IConnectionMultiplexer with health check and OpenTelemetry tracing.
+    builder.AddRedisClient("redis");
+    builder.Services.AddSingleton<IBasketRepository, RedisBasketRepository>();
+}
+else
+{
+    builder.Services.AddSingleton<IBasketRepository, InMemoryBasketRepository>();
+}
 
 builder.Services.AddHttpClient<ICatalogClient, CatalogClient>(http =>
     http.BaseAddress = new Uri(builder.Configuration["Services:Catalog"]!));

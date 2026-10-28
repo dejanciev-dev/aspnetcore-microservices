@@ -5,26 +5,27 @@ namespace Ordering.API.Data;
 
 public interface IOrderRepository
 {
-    IReadOnlyList<Order> ListByUser(string userName);
-    Order? Get(Guid id);
-    Order Add(Order order);
+    Task<IReadOnlyList<Order>> ListByUserAsync(string userName, CancellationToken ct = default);
+    Task<Order?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<Order> AddAsync(Order order, CancellationToken ct = default);
 }
 
+/// <summary>In-memory store used when no database is configured.</summary>
 public sealed class InMemoryOrderRepository : IOrderRepository
 {
     private readonly ConcurrentDictionary<Guid, Order> _orders = new();
 
-    public IReadOnlyList<Order> ListByUser(string userName) =>
-        _orders.Values
+    public Task<IReadOnlyList<Order>> ListByUserAsync(string userName, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<Order>>(_orders.Values
             .Where(o => o.UserName.Equals(userName, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(o => o.CreatedAt)
-            .ToList();
+            .ToList());
 
-    public Order? Get(Guid id) => _orders.GetValueOrDefault(id);
+    public Task<Order?> GetAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_orders.GetValueOrDefault(id));
 
-    public Order Add(Order order)
+    public Task<Order> AddAsync(Order order, CancellationToken ct = default)
     {
         _orders[order.Id] = order;
-        return order;
+        return Task.FromResult(order);
     }
 }

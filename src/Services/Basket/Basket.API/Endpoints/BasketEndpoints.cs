@@ -11,7 +11,8 @@ public static class BasketEndpoints
     {
         var group = app.MapGroup("/api/basket/{userName}").WithTags("Basket");
 
-        group.MapGet("/", (string userName, IBasketRepository repo) => TypedResults.Ok(repo.Get(userName)))
+        group.MapGet("/", async (string userName, IBasketRepository repo, CancellationToken ct) =>
+                TypedResults.Ok(await repo.GetAsync(userName, ct)))
             .WithName("GetBasket");
 
         group.MapPost("/items", async Task<Results<Ok<ShoppingCart>, ValidationProblem>> (
@@ -25,7 +26,7 @@ public static class BasketEndpoints
                     [nameof(request.ProductId)] = [$"Product '{request.ProductId}' does not exist."]
                 });
 
-            var cart = repo.Get(userName);
+            var cart = await repo.GetAsync(userName, ct);
             var existing = cart.Items.FirstOrDefault(i => i.ProductId == product.Id);
             var quantity = (existing?.Quantity ?? 0) + request.Quantity;
 
@@ -33,20 +34,20 @@ public static class BasketEndpoints
                 .Append(new CartItem(product.Id, product.Name, product.ImageUrl, product.Price, quantity))
                 .ToList();
 
-            return TypedResults.Ok(repo.Save(cart with { Items = items }));
+            return TypedResults.Ok(await repo.SaveAsync(cart with { Items = items }, ct));
         })
         .WithName("AddBasketItem");
 
-        group.MapDelete("/items/{productId:guid}", (string userName, Guid productId, IBasketRepository repo) =>
+        group.MapDelete("/items/{productId:guid}", async (string userName, Guid productId, IBasketRepository repo, CancellationToken ct) =>
         {
-            var cart = repo.Get(userName);
-            return TypedResults.Ok(repo.Save(cart with { Items = cart.Items.Where(i => i.ProductId != productId).ToList() }));
+            var cart = await repo.GetAsync(userName, ct);
+            return TypedResults.Ok(await repo.SaveAsync(cart with { Items = cart.Items.Where(i => i.ProductId != productId).ToList() }, ct));
         })
         .WithName("RemoveBasketItem");
 
-        group.MapDelete("/", (string userName, IBasketRepository repo) =>
+        group.MapDelete("/", async (string userName, IBasketRepository repo, CancellationToken ct) =>
         {
-            repo.Delete(userName);
+            await repo.DeleteAsync(userName, ct);
             return TypedResults.NoContent();
         })
         .WithName("ClearBasket");
@@ -54,7 +55,7 @@ public static class BasketEndpoints
         group.MapPost("/checkout", async Task<Results<Ok<CheckoutResult>, ValidationProblem>> (
             string userName, CheckoutRequest request, IBasketRepository repo, IOrderingClient ordering, CancellationToken ct) =>
         {
-            var cart = repo.Get(userName);
+            var cart = await repo.GetAsync(userName, ct);
             if (cart.Items.Count == 0)
                 return TypedResults.ValidationProblem(new Dictionary<string, string[]>
                 {
@@ -62,7 +63,7 @@ public static class BasketEndpoints
                 });
 
             var result = await ordering.CreateOrderAsync(cart, request.ShippingAddress, ct);
-            repo.Delete(userName);
+            await repo.DeleteAsync(userName, ct);
             return TypedResults.Ok(result);
         })
         .WithName("Checkout");

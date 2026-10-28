@@ -1,15 +1,36 @@
-// .NET Aspire orchestration: one F5 starts every service, the gateway and the Angular app,
-// wires their URLs together and streams logs, metrics and traces to the Aspire dashboard.
+// .NET Aspire orchestration: one F5 starts PostgreSQL, Redis, every service, the gateway and
+// the Angular app, wires their connection strings and URLs together and streams logs, metrics
+// and traces to the Aspire dashboard.
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+// Infrastructure runs in containers (Docker or Podman); data volumes survive restarts.
+var postgres = builder.AddPostgres("postgres")
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+var catalogDb = postgres.AddDatabase("catalogdb");
+var orderingDb = postgres.AddDatabase("orderingdb");
+
+var redis = builder.AddRedis("redis")
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+// WithReference injects ConnectionStrings__<name>, which switches each service from its
+// in-memory store to the real database.
 var catalog = builder.AddProject<Projects.Catalog_API>("catalog-api")
+    .WithReference(catalogDb)
+    .WaitFor(catalogDb)
     .WithHttpHealthCheck("/health");
 
 var ordering = builder.AddProject<Projects.Ordering_API>("ordering-api")
+    .WithReference(orderingDb)
+    .WaitFor(orderingDb)
     .WithHttpHealthCheck("/health");
 
 var basket = builder.AddProject<Projects.Basket_API>("basket-api")
+    .WithReference(redis)
+    .WaitFor(redis)
     .WithEnvironment("Services__Catalog", catalog.GetEndpoint("http"))
     .WithEnvironment("Services__Ordering", ordering.GetEndpoint("http"))
     .WithHttpHealthCheck("/health")

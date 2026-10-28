@@ -11,35 +11,35 @@ public static class ProductEndpoints
     {
         var group = app.MapGroup("/api/products").WithTags("Products");
 
-        group.MapGet("/", (IProductRepository repo, string? category, string? search, int page = 1, int pageSize = 12) =>
+        group.MapGet("/", async (IProductRepository repo, string? category, string? search, CancellationToken ct, int page = 1, int pageSize = 12) =>
         {
             page = Math.Max(page, 1);
             pageSize = Math.Clamp(pageSize, 1, 100);
-            return TypedResults.Ok(repo.List(category, search, page, pageSize));
+            return TypedResults.Ok(await repo.ListAsync(category, search, page, pageSize, ct));
         })
         .WithName("ListProducts")
         .WithSummary("List products with optional filtering and paging");
 
-        group.MapGet("/categories", (IProductRepository repo) => TypedResults.Ok(repo.Categories()))
+        group.MapGet("/categories", async (IProductRepository repo, CancellationToken ct) => TypedResults.Ok(await repo.CategoriesAsync(ct)))
             .WithName("ListCategories");
 
-        group.MapGet("/{id:guid}", Results<Ok<Product>, NotFound> (Guid id, IProductRepository repo) =>
-            repo.Get(id) is { } product ? TypedResults.Ok(product) : TypedResults.NotFound())
+        group.MapGet("/{id:guid}", async Task<Results<Ok<Product>, NotFound>> (Guid id, IProductRepository repo, CancellationToken ct) =>
+            await repo.GetAsync(id, ct) is { } product ? TypedResults.Ok(product) : TypedResults.NotFound())
             .WithName("GetProduct");
 
-        group.MapPost("/", (UpsertProductRequest request, IProductRepository repo) =>
+        group.MapPost("/", async (UpsertProductRequest request, IProductRepository repo, CancellationToken ct) =>
         {
-            var product = repo.Add(request.ToProduct(Guid.NewGuid()));
+            var product = await repo.AddAsync(request.ToProduct(Guid.NewGuid()), ct);
             return TypedResults.CreatedAtRoute(product, "GetProduct", new { id = product.Id });
         })
         .WithName("CreateProduct");
 
-        group.MapPut("/{id:guid}", Results<NoContent, NotFound> (Guid id, UpsertProductRequest request, IProductRepository repo) =>
-            repo.Update(request.ToProduct(id)) ? TypedResults.NoContent() : TypedResults.NotFound())
+        group.MapPut("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, UpsertProductRequest request, IProductRepository repo, CancellationToken ct) =>
+            await repo.UpdateAsync(request.ToProduct(id), ct) ? TypedResults.NoContent() : TypedResults.NotFound())
             .WithName("UpdateProduct");
 
-        group.MapDelete("/{id:guid}", Results<NoContent, NotFound> (Guid id, IProductRepository repo) =>
-            repo.Delete(id) ? TypedResults.NoContent() : TypedResults.NotFound())
+        group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, IProductRepository repo, CancellationToken ct) =>
+            await repo.DeleteAsync(id, ct) ? TypedResults.NoContent() : TypedResults.NotFound())
             .WithName("DeleteProduct");
 
         return app;

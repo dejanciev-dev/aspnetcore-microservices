@@ -22,21 +22,21 @@ public sealed class OrderingApiTests(WebApplicationFactory<OrderingApiMarker> fa
             new OrderItem(Guid.NewGuid(), "Mouse", 25m, 1)
         ], Address);
 
-        var response = await _client.PostAsJsonAsync("/api/orders", request);
+        var response = await _client.PostAsJsonAsync("/api/orders", request, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
-        var order = await response.Content.ReadFromJsonAsync<Order>();
+        var order = await response.Content.ReadFromJsonAsync<Order>(TestContext.Current.CancellationToken);
         Assert.Equal(225m, order?.Total);
         Assert.Equal(OrderStatus.Submitted, order?.Status);
 
-        var orders = await _client.GetFromJsonAsync<List<Order>>("/api/orders?userName=ada");
+        var orders = await _client.GetFromJsonAsync<List<Order>>("/api/orders?userName=ada", TestContext.Current.CancellationToken);
         Assert.Contains(orders!, o => o.Id == order!.Id);
     }
 
     [Fact]
     public async Task Create_order_without_items_returns_400()
     {
-        var response = await _client.PostAsJsonAsync("/api/orders", new CreateOrderRequest("ada", [], Address));
+        var response = await _client.PostAsJsonAsync("/api/orders", new CreateOrderRequest("ada", [], Address), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

@@ -21,12 +21,18 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore aspnetcore-microservices.slnx
       - run: dotnet build aspnetcore-microservices.slnx -c Release --no-restore
-      - run: dotnet test aspnetcore-microservices.slnx -c Release --no-build --logger "trx;LogFileName=results.trx" --collect:"XPlat Code Coverage"
+      # Microsoft.Testing.Platform (see global.json). Integration tests start PostgreSQL and
+      # Redis with Testcontainers using the runner's Docker; CI=true makes them fail, not skip,
+      # if Docker is missing.
+      - run: >-
+          dotnet test --solution aspnetcore-microservices.slnx -c Release --no-build
+          --report-trx --coverage --coverage-output-format cobertura
+          --results-directory TestResults
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: backend-test-results
-          path: tests/**/TestResults/
+          path: TestResults/
 
   frontend:
     name: Angular build & test

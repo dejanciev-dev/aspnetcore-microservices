@@ -2,6 +2,8 @@
 #   Storefront        http://localhost:4200
 #   API gateway       http://localhost:5100
 #   Aspire dashboard  http://localhost:18888   (logs, metrics, distributed traces)
+#   PostgreSQL        localhost:5432            (postgres / ${POSTGRES_PASSWORD:-postgres})
+#   Redis             localhost:6379
 
 x-service-defaults: &service-defaults
   restart: unless-stopped
@@ -21,6 +23,9 @@ services:
     environment:
       <<: *otel-env
       OTEL_SERVICE_NAME: catalog-api
+      ConnectionStrings__catalogdb: Host=postgres;Database=catalogdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres: { condition: service_healthy }
 
   ordering-api:
     <<: *service-defaults
@@ -32,6 +37,9 @@ services:
     environment:
       <<: *otel-env
       OTEL_SERVICE_NAME: ordering-api
+      ConnectionStrings__orderingdb: Host=postgres;Database=orderingdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres: { condition: service_healthy }
 
   basket-api:
     <<: *service-defaults
@@ -43,9 +51,13 @@ services:
     environment:
       <<: *otel-env
       OTEL_SERVICE_NAME: basket-api
+      ConnectionStrings__redis: redis:6379
       Services__Catalog: http://catalog-api:8080
       Services__Ordering: http://ordering-api:8080
-    depends_on: [catalog-api, ordering-api]
+    depends_on:
+      redis: { condition: service_healthy }
+      catalog-api: { condition: service_started }
+      ordering-api: { condition: service_started }
 
   api-gateway:
     <<: *service-defaults
@@ -71,6 +83,35 @@ services:
       - "4200:80"
     depends_on: [api-gateway]
 
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}   # override via .env for anything non-local
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql   # PostgreSQL 18+ images keep data under this path
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]   # persist baskets across restarts
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:13.6
     restart: unless-stopped
@@ -78,3 +119,7 @@ services:
       ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"   # local demo only
     ports:
       - "18888:18888"
+
+volumes:
+  postgres-data:
+  redis-data:

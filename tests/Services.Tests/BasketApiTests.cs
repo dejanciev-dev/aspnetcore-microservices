@@ -28,8 +28,8 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
     {
         var user = NewUser();
 
-        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id, 2));
-        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}");
+        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id, 2), TestContext.Current.CancellationToken);
+        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", TestContext.Current.CancellationToken);
 
         var item = Assert.Single(cart!.Items);
         Assert.Equal(Keyboard.Price, item.UnitPrice);
@@ -39,7 +39,7 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
     [Fact]
     public async Task Adding_an_unknown_product_returns_400()
     {
-        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/items", new AddItemRequest(Guid.NewGuid()));
+        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/items", new AddItemRequest(Guid.NewGuid()), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -48,15 +48,15 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
     public async Task Checkout_creates_an_order_and_clears_the_basket()
     {
         var user = NewUser();
-        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id));
+        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id), TestContext.Current.CancellationToken);
 
         var address = new ShippingAddress("Ada Lovelace", "1 Main St", "London", "UK", "N1 9GU");
-        var response = await _client.PostAsJsonAsync($"/api/basket/{user}/checkout", new CheckoutRequest(address));
+        var response = await _client.PostAsJsonAsync($"/api/basket/{user}/checkout", new CheckoutRequest(address), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(_ordering.Submitted, c => c.UserName == user);
 
-        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}");
+        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", TestContext.Current.CancellationToken);
         Assert.Empty(cart!.Items);
     }
 
@@ -65,7 +65,7 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
     {
         var address = new ShippingAddress("Ada Lovelace", "1 Main St", "London", "UK", "N1 9GU");
 
-        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/checkout", new CheckoutRequest(address));
+        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/checkout", new CheckoutRequest(address), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
