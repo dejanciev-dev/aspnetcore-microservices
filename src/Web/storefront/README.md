@@ -1,59 +1,55 @@
-# Storefront
+# Storefront (Angular 21)
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.29.
+The customer-facing single-page app of the [ASP.NET Core Microservices](../../../README.md) solution. It talks to the backend only through the YARP API gateway.
 
-## Development server
+![Angular](https://img.shields.io/badge/Angular-21-DD0031?logo=angular&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
+![Vitest](https://img.shields.io/badge/tested%20with-Vitest-6E9F18?logo=vitest&logoColor=white)
 
-To start a local development server, run:
+## Highlights
 
-```bash
-ng serve
-```
+- **Zoneless**, standalone components, **signals** everywhere
+- **`httpResource`** for reactive, declarative data loading
+- **Signal Forms** for the checkout form
+- Router **component input binding**, lazy routes, view transitions
+- Signal-based `BasketStore`, with no external state library
+- ProblemDetails-aware error messages, toasts, skeleton loaders
+- Light and dark themes, responsive layout
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+## Running
 
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
-```bash
-ng generate component component-name
-```
-
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+The backend must be running (see the [root README](../../../README.md#-quick-start)).
 
 ```bash
-ng generate --help
+npm install
+npm start          # http://localhost:4200
 ```
 
-## Building
-
-To build the project run:
+`/api` requests are proxied to the gateway at `http://localhost:5100`. Override this with `GATEWAY_URL`:
 
 ```bash
-ng build
+GATEWAY_URL=http://localhost:6000 npm start
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+When started from the .NET Aspire AppHost, `GATEWAY_URL` is set automatically.
 
-## Running unit tests
+## Scripts
 
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+| Command | Description |
+|---|---|
+| `npm start` | Dev server with the API proxy |
+| `npm run build` | Production build to `dist/storefront/browser` |
+| `npx ng test --watch=false` | Unit and component tests (Vitest) |
+| `npm run watch` | Development build in watch mode |
+
+## Container
 
 ```bash
-ng test
+docker build -t storefront .
 ```
 
-## Running end-to-end tests
+Builds the app on `node:22-alpine` and serves it from `nginx:alpine`. [`nginx.conf`](nginx.conf) proxies `/api` to `api-gateway:8080`, caches hashed assets and falls back to `index.html` for client-side routes. The image is normally built through the root `docker-compose.yml`.
 
-For end-to-end (e2e) testing, run:
+## Learn more
 
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+[docs/frontend.md](../../../docs/frontend.md) covers the structure, patterns and testing approach in depth.
