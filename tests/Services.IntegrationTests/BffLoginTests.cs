@@ -42,7 +42,7 @@ public sealed partial class BffLoginTests(Infrastructure infra)
 
         // 2. Keycloak shows its login page; submit ada's credentials.
         using var keycloak = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer() });
-        var loginPage = await keycloak.GetStringAsync(challenge.Headers.Location, Ct);
+        var loginPage = await OpenKeycloakPageAsync(keycloak, challenge.Headers.Location!);
         var formAction = WebUtility.HtmlDecode(LoginFormAction().Match(loginPage).Groups["action"].Value);
         var login = await keycloak.PostAsync(formAction, new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -94,6 +94,28 @@ public sealed partial class BffLoginTests(Infrastructure infra)
         var response = await gateway.CreateClient().GetStringAsync("/api/products", Ct);
 
         Assert.Equal("", response);
+    }
+
+    /// <summary>
+    /// Follows Keycloak's own redirects (it may hop through login-actions URLs) like a browser would,
+    /// and fails with the target if Keycloak sends the browser anywhere else, e.g. back with an error.
+    /// </summary>
+    private async Task<string> OpenKeycloakPageAsync(HttpClient keycloak, Uri url)
+    {
+        for (var hop = 0; hop < 5; hop++)
+        {
+            using var response = await keycloak.GetAsync(url, Ct);
+            if (response.IsSuccessStatusCode) return await response.Content.ReadAsStringAsync(Ct);
+
+            var location = response.Headers.Location;
+            if (location is null || !new Uri(url, location).ToString().StartsWith(infra.KeycloakRealmUrl))
+                Assert.Fail($"Keycloak answered {(int)response.StatusCode} for {url}; Location: {location}; body: {await response.Content.ReadAsStringAsync(Ct)}");
+
+            url = new Uri(url, location);
+        }
+
+        Assert.Fail("Too many redirects inside Keycloak.");
+        return "";
     }
 
     [GeneratedRegex("<form[^>]*action=\"(?<action>[^\"]+)\"")]
