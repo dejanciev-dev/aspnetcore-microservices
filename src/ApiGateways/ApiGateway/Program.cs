@@ -1,5 +1,8 @@
+using BuildingBlocks.Common;
+
 var builder = WebApplication.CreateBuilder(args);
 
+builder.ConfigureOpenTelemetry();
 builder.Services.AddHealthChecks();
 builder.Services
     .AddReverseProxy()

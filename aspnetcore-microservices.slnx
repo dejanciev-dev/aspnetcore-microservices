@@ -3,6 +3,9 @@
   <Folder Name="/src/ApiGateways/">
     <Project Path="src/ApiGateways/ApiGateway/ApiGateway.csproj" />
   </Folder>
+  <Folder Name="/src/Aspire/">
+    <Project Path="src/Aspire/AppHost/AppHost.csproj" />
+  </Folder>
   <Folder Name="/src/BuildingBlocks/">
     <Project Path="src/BuildingBlocks/BuildingBlocks.Common/BuildingBlocks.Common.csproj" />
   </Folder>
