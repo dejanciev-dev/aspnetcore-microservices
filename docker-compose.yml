@@ -4,6 +4,7 @@
 #   Aspire dashboard  http://localhost:18888   (logs, metrics, distributed traces)
 #   PostgreSQL        localhost:5432            (postgres / ${POSTGRES_PASSWORD:-postgres})
 #   Redis             localhost:6379
+#   RabbitMQ UI       http://localhost:15672    (storefront / ${RABBITMQ_PASSWORD:-storefront})
 
 x-service-defaults: &service-defaults
   restart: unless-stopped
@@ -24,8 +25,10 @@ services:
       <<: *otel-env
       OTEL_SERVICE_NAME: catalog-api
       ConnectionStrings__catalogdb: Host=postgres;Database=catalogdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
     depends_on:
       postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
 
   ordering-api:
     <<: *service-defaults
@@ -38,8 +41,10 @@ services:
       <<: *otel-env
       OTEL_SERVICE_NAME: ordering-api
       ConnectionStrings__orderingdb: Host=postgres;Database=orderingdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
     depends_on:
       postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
 
   basket-api:
     <<: *service-defaults
@@ -52,10 +57,12 @@ services:
       <<: *otel-env
       OTEL_SERVICE_NAME: basket-api
       ConnectionStrings__redis: redis:6379
+      ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
       Services__Catalog: http://catalog-api:8080
       Services__Ordering: http://ordering-api:8080
     depends_on:
       redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
       catalog-api: { condition: service_started }
       ordering-api: { condition: service_started }
 
@@ -112,6 +119,24 @@ services:
       timeout: 3s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    environment:
+      # A dedicated user: RabbitMQ only lets "guest" connect from localhost.
+      RABBITMQ_DEFAULT_USER: storefront
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-storefront}
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:13.6
     restart: unless-stopped
@@ -123,3 +148,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  rabbitmq-data:

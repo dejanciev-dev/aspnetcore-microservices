@@ -7,7 +7,8 @@ public interface IOrderRepository
 {
     Task<IReadOnlyList<Order>> ListByUserAsync(string userName, CancellationToken ct = default);
     Task<Order?> GetAsync(Guid id, CancellationToken ct = default);
-    Task<Order> AddAsync(Order order, CancellationToken ct = default);
+    /// <summary>Adds the order unless one with the same id exists (idempotent message handling).</summary>
+    Task<bool> TryAddAsync(Order order, CancellationToken ct = default);
 }
 
 /// <summary>In-memory store used when no database is configured.</summary>
@@ -23,9 +24,5 @@ public sealed class InMemoryOrderRepository : IOrderRepository
 
     public Task<Order?> GetAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_orders.GetValueOrDefault(id));
 
-    public Task<Order> AddAsync(Order order, CancellationToken ct = default)
-    {
-        _orders[order.Id] = order;
-        return Task.FromResult(order);
-    }
+    public Task<bool> TryAddAsync(Order order, CancellationToken ct = default) => Task.FromResult(_orders.TryAdd(order.Id, order));
 }

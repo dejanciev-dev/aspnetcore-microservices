@@ -1,7 +1,9 @@
 using BuildingBlocks.Common;
+using BuildingBlocks.Messaging;
 using Microsoft.EntityFrameworkCore;
 using Ordering.API.Data;
 using Ordering.API.Endpoints;
+using Ordering.API.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +22,12 @@ if (usePostgres)
 else
 {
     builder.Services.AddSingleton<IOrderRepository, InMemoryOrderRepository>();
+}
+
+// RabbitMQ when configured: orders are created from BasketCheckedOut events (POST /api/orders keeps working).
+if (builder.AddRabbitMqMessaging(queuePrefix: "ordering-api"))
+{
+    builder.Services.AddEventHandler<BasketCheckedOut, BasketCheckedOutHandler>();
 }
 
 var app = builder.Build();

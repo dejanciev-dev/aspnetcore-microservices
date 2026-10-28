@@ -1,4 +1,5 @@
 using BuildingBlocks.Common;
+using BuildingBlocks.Messaging;
 using Catalog.API.Data;
 using Catalog.API.Endpoints;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,13 @@ if (usePostgres)
 else
 {
     builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
+}
+
+// RabbitMQ when configured: the outbox relay publishes ProductPriceChanged events staged by
+// EfProductRepository. Without a broker the outbox simply fills up and is drained once one is added.
+if (builder.AddRabbitMqMessaging(queuePrefix: "catalog-api") && usePostgres)
+{
+    builder.Services.AddOutboxRelay<CatalogDbContext>();
 }
 
 var app = builder.Build();

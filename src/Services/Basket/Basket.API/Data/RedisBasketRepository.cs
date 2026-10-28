@@ -31,6 +31,31 @@ public sealed class RedisBasketRepository(IConnectionMultiplexer redis) : IBaske
 
     public Task DeleteAsync(string userName, CancellationToken ct = default) => Db.KeyDeleteAsync(Key(userName));
 
+    /// <summary>
+    /// Walks all baskets with SCAN (non-blocking, cursor based) and reprices matching items,
+    /// keeping each basket's remaining expiry. Fine at demo scale; a product → baskets index
+    /// would avoid the full scan in production.
+    /// </summary>
+    public async Task<int> UpdatePriceAsync(Guid productId, decimal newPrice, CancellationToken ct = default)
+    {
+        var updated = 0;
+        foreach (var server in redis.GetServers().Where(s => !s.IsReplica))
+        {
+            await foreach (var key in server.KeysAsync(Db.Database, pattern: "basket:*").WithCancellation(ct))
+            {
+                var value = await Db.StringGetAsync(key);
+                if (value.IsNullOrEmpty) continue;
+
+                var cart = JsonSerializer.Deserialize<ShoppingCart>(value.ToString(), Json);
+                if (cart?.WithPrice(productId, newPrice) is not { } repriced) continue;
+
+                await Db.StringSetAsync(key, JsonSerializer.Serialize(repriced, Json), expiry: null, keepTtl: true);
+                updated++;
+            }
+        }
+        return updated;
+    }
+
     // User names are case-insensitive, matching the in-memory store.
     private static RedisKey Key(string userName) => $"basket:{userName.ToLowerInvariant()}";
 }

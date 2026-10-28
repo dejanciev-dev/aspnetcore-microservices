@@ -1,4 +1,5 @@
 using Testcontainers.PostgreSql;
+using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
 
 [assembly: AssemblyFixture(typeof(Services.IntegrationTests.Infrastructure))]
@@ -6,7 +7,7 @@ using Testcontainers.Redis;
 namespace Services.IntegrationTests;
 
 /// <summary>
-/// One PostgreSQL and one Redis container shared by the whole test run.
+/// One PostgreSQL, one Redis and one RabbitMQ container shared by the whole test run.
 /// Without Docker the tests are skipped locally, but they fail on CI so a broken
 /// runner never passes silently.
 /// </summary>
@@ -14,6 +15,7 @@ public sealed class Infrastructure : IAsyncLifetime
 {
     private PostgreSqlContainer? _postgres;
     private RedisContainer? _redis;
+    private RabbitMqContainer? _rabbitMq;
 
     public string? UnavailableReason { get; private set; }
 
@@ -24,7 +26,8 @@ public sealed class Infrastructure : IAsyncLifetime
             // Build() already probes the Docker endpoint, so it belongs inside the try.
             _postgres = new PostgreSqlBuilder("postgres:18-alpine").Build();
             _redis = new RedisBuilder("redis:8-alpine").Build();
-            await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync());
+            _rabbitMq = new RabbitMqBuilder("rabbitmq:4-management-alpine").Build();
+            await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbitMq.StartAsync());
         }
         catch (Exception ex) when (Environment.GetEnvironmentVariable("CI") is null)
         {
@@ -48,9 +51,19 @@ public sealed class Infrastructure : IAsyncLifetime
         }
     }
 
+    public string RabbitMqConnectionString
+    {
+        get
+        {
+            Assert.SkipWhen(UnavailableReason is not null, UnavailableReason ?? "");
+            return _rabbitMq!.GetConnectionString();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_postgres is not null) await _postgres.DisposeAsync();
         if (_redis is not null) await _redis.DisposeAsync();
+        if (_rabbitMq is not null) await _rabbitMq.DisposeAsync();
     }
 }

@@ -1,3 +1,4 @@
+using BuildingBlocks.Messaging;
 using Catalog.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
@@ -23,6 +24,9 @@ public sealed class CatalogDbContext(DbContextOptions<CatalogDbContext> options)
             product.Property(p => p.ImageUrl).HasMaxLength(500);
             product.HasIndex(p => p.Category);
         });
+
+        // Integration events are staged here in the same transaction as product changes.
+        modelBuilder.AddOutbox();
     }
 
     /// <summary>Inserts the demo products into an empty database. Runs as part of Migrate().</summary>

@@ -1,9 +1,11 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
 import { httpResource } from '@angular/common/http';
-import { Component, booleanAttribute, computed, input } from '@angular/core';
+import { Component, booleanAttribute, computed, effect, input, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Order } from '../../core/models';
 import { problemMessage } from '../../core/problem-details';
+
+const MAX_POLLS = 20;
 
 @Component({
   selector: 'app-order-detail',
@@ -15,7 +17,12 @@ import { problemMessage } from '../../core/problem-details';
       <div class="alert alert--success" role="status">🎉 Thanks! Your order has been placed.</div>
     }
 
-    @if (order.error()) {
+    @if (processing()) {
+      <div class="card empty" role="status">
+        <p>⏳ Your order is being processed…</p>
+        <p class="muted">Ordering picks it up from the message queue. This page updates automatically.</p>
+      </div>
+    } @else if (order.error()) {
       <div class="alert" role="alert">{{ errorMessage() }}</div>
     } @else if (order.hasValue()) {
       @let o = order.value();
@@ -65,6 +72,33 @@ export class OrderDetail {
   readonly placed = input(false, { transform: booleanAttribute });
 
   protected readonly order = httpResource<Order>(() => `/api/orders/${this.id()}`);
+  private readonly polls = signal(0);
+
+  /**
+   * With asynchronous checkout the order is created by Ordering from a RabbitMQ message, so right
+   * after checkout it may not exist yet. While that is plausible, show a processing state and poll.
+   */
+  protected readonly processing = computed(
+    () =>
+      this.placed() &&
+      !this.order.hasValue() &&
+      this.polls() < MAX_POLLS &&
+      (this.order.isLoading() || this.order.statusCode() === 404),
+  );
+
+  constructor() {
+    effect((onCleanup) => {
+      if (!this.placed() || this.order.isLoading() || this.order.statusCode() !== 404) return;
+      if (untracked(this.polls) >= MAX_POLLS) return;
+
+      const timer = setTimeout(() => {
+        this.polls.update((n) => n + 1);
+        this.order.reload();
+      }, 1000);
+      onCleanup(() => clearTimeout(timer));
+    });
+  }
+
   protected readonly errorMessage = computed(() =>
     this.order.statusCode() === 404 ? 'Order not found.' : problemMessage(this.order.error()),
   );

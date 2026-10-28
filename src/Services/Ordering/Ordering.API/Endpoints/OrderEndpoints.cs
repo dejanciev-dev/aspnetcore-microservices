@@ -21,13 +21,14 @@ public static class OrderEndpoints
 
         group.MapPost("/", async (CreateOrderRequest request, IOrderRepository repo, TimeProvider clock, ILogger<Order> logger, CancellationToken ct) =>
         {
-            var order = await repo.AddAsync(new Order(
+            var order = new Order(
                 Guid.NewGuid(),
                 request.UserName,
                 request.Items,
                 request.ShippingAddress,
                 OrderStatus.Submitted,
-                clock.GetUtcNow()), ct);
+                clock.GetUtcNow());
+            await repo.TryAddAsync(order, ct);
 
             logger.LogInformation("Order {OrderId} submitted by {UserName} for {Total:C}", order.Id, order.UserName, order.Total);
             return TypedResults.CreatedAtRoute(order, "GetOrder", new { id = order.Id });

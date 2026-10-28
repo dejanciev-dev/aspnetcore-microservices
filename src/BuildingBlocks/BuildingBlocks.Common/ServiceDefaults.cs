@@ -48,6 +48,7 @@ public static class ServiceDefaults
                 .AddRuntimeInstrumentation())
             .WithTracing(tracing => tracing
                 .AddSource(builder.Environment.ApplicationName)
+                .AddSource("BuildingBlocks.Messaging")   // RabbitMQ publish/process spans
                 .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !ctx.Request.Path.StartsWithSegments("/health"))
                 .AddHttpClientInstrumentation());
 

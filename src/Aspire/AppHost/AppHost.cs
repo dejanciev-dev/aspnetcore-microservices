@@ -1,4 +1,4 @@
-// .NET Aspire orchestration: one F5 starts PostgreSQL, Redis, every service, the gateway and
+// .NET Aspire orchestration: one F5 starts PostgreSQL, Redis, RabbitMQ, every service, the gateway and
 // the Angular app, wires their connection strings and URLs together and streams logs, metrics
 // and traces to the Aspire dashboard.
 
@@ -16,21 +16,33 @@ var redis = builder.AddRedis("redis")
     .WithDataVolume()
     .WithLifetime(ContainerLifetime.Persistent);
 
+// Message broker for integration events; the management UI is linked from the dashboard.
+var rabbitmq = builder.AddRabbitMQ("rabbitmq")
+    .WithManagementPlugin()
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
 // WithReference injects ConnectionStrings__<name>, which switches each service from its
-// in-memory store to the real database.
+// in-memory store to the real database, and from HTTP-only to RabbitMQ messaging.
 var catalog = builder.AddProject<Projects.Catalog_API>("catalog-api")
     .WithReference(catalogDb)
     .WaitFor(catalogDb)
+    .WithReference(rabbitmq)
+    .WaitFor(rabbitmq)
     .WithHttpHealthCheck("/health");
 
 var ordering = builder.AddProject<Projects.Ordering_API>("ordering-api")
     .WithReference(orderingDb)
     .WaitFor(orderingDb)
+    .WithReference(rabbitmq)
+    .WaitFor(rabbitmq)
     .WithHttpHealthCheck("/health");
 
 var basket = builder.AddProject<Projects.Basket_API>("basket-api")
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(rabbitmq)
+    .WaitFor(rabbitmq)
     .WithEnvironment("Services__Catalog", catalog.GetEndpoint("http"))
     .WithEnvironment("Services__Ordering", ordering.GetEndpoint("http"))
     .WithHttpHealthCheck("/health")
