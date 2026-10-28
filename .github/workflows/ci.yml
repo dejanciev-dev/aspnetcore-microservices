@@ -56,4 +56,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build ${{ matrix.service }} image
-        run: docker compose build ${{ matrix.service }}
+        run: |
+          set -o pipefail
+          if ! docker compose build --progress=plain ${{ matrix.service }} 2>&1 | tee build.log; then
+            # Surface the end of the build output as an annotation on the run/PR.
+            echo "::error title=docker build ${{ matrix.service }}::$(tail -n 40 build.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
