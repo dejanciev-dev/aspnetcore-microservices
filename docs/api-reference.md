@@ -43,6 +43,24 @@ Calls authenticated by the gateway session cookie must include `X-CSRF: 1`, othe
 |---|---|
 | `401 Unauthorized` | No token, or an invalid or expired one |
 | `403 Forbidden` | Valid token, but missing the required role (e.g. `admin`), or a missing `X-CSRF` header |
+| `429 Too Many Requests` | The gateway's rate limit was exceeded; wait for the number of seconds in `Retry-After` |
+
+### Rate limits (gateway)
+
+| Scope | Default |
+|---|---|
+| All requests, per signed-in user | burst of 200, then 100 per 10 s |
+| All requests, per anonymous client IP | burst of 60, then 30 per 10 s |
+| `POST /api/basket/checkout` | 5 per minute |
+| `GET /bff/login` | 10 per minute |
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+Content-Type: application/problem+json
+
+{ "title": "Too many requests", "status": 429, "detail": "Try again in 42 seconds." }
+```
 
 ---
 

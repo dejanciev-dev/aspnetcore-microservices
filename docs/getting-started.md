@@ -127,6 +127,8 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 |---|---|---|---|
 | `Identity:Authority` | all services, gateway | `http://localhost:8080/realms/storefront` | Keycloak realm; the token issuer |
 | `Identity:MetadataAddress` | all services, gateway | *(derived from Authority)* | Where to fetch discovery and keys when the internal host differs (Compose) |
+| `RateLimiting:Anonymous:*` / `RateLimiting:Authenticated:*` | gateway | burst 60 / 200, then 30 / 100 per 10 s | Global token buckets per IP / per user (`TokenLimit`, `TokensPerPeriod`, `ReplenishmentPeriodSeconds`) |
+| `RateLimiting:Checkout:*` / `RateLimiting:Login:*` | gateway | 5 / 10 per 60 s | Fixed windows for checkout and sign-in starts (`PermitLimit`, `WindowSeconds`) |
 | `Identity:ClientId` / `Identity:ClientSecret` | gateway | `storefront-bff` / dev secret | The BFF's confidential client; override the secret outside development |
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
@@ -193,7 +195,7 @@ To watch messaging in action: change a product's price (`PUT /api/products/{id}`
 The test projects use **xUnit v3** on **Microsoft.Testing.Platform** (opted in via `global.json`).
 
 ```bash
-# everything: 20 API tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
+# everything: 25 API tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
 dotnet test
 
 # with TRX reports and Cobertura coverage
@@ -256,6 +258,12 @@ The gateway builds the callback URL from the host the browser used. Only `http:/
 <summary><b>Signing in ends with "Correlation failed" or loops back to the login page</b></summary>
 
 The browser didn't send back the OIDC correlation cookie. Make sure the dev proxy or nginx forwards `/signin-oidc` to the gateway **with the original Host header** (`changeOrigin: false`, `proxy_set_header Host $http_host`), and clear cookies for `localhost`.
+</details>
+
+<details>
+<summary><b>Requests fail with 429 "Too many requests"</b></summary>
+
+The gateway's rate limiter kicked in; the response's `Retry-After` header says when to retry. Load tests and scripts hit the anonymous per-IP budget quickly. Raise the limits for local work, e.g. `RateLimiting__Anonymous__TokenLimit=1000`, or call a service directly on its own port, which bypasses the gateway.
 </details>
 
 <details>
