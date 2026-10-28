@@ -3,7 +3,8 @@
 # native build dependencies (e.g. @napi-rs/lzma) have no musl binary recorded in it.
 FROM node:22-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
+# .npmrc (legacy-peer-deps) must be present, or npm ci sees the lockfile as out of sync.
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 COPY . .
 RUN npx ng build --configuration production
