@@ -49,6 +49,11 @@ jobs:
     name: Docker images
     runs-on: ubuntu-latest
     needs: [backend, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [catalog-api, basket-api, ordering-api, api-gateway, storefront]
     steps:
       - uses: actions/checkout@v5
-      - run: docker compose build
+      - name: Build ${{ matrix.service }} image
+        run: docker compose build ${{ matrix.service }}

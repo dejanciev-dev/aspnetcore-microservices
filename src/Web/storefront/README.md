@@ -48,7 +48,7 @@ When started from the .NET Aspire AppHost, `GATEWAY_URL` is set automatically.
 docker build -t storefront .
 ```
 
-Builds the app on `node:22-alpine` and serves it from `nginx:alpine`. [`nginx.conf`](nginx.conf) proxies `/api` to `api-gateway:8080`, caches hashed assets and falls back to `index.html` for client-side routes. The image is normally built through the root `docker-compose.yml`.
+Builds the app on `node:22-slim` and serves it from `nginx:alpine`. [`nginx.conf`](nginx.conf) proxies `/api` to `api-gateway:8080`, caches hashed assets and falls back to `index.html` for client-side routes. The image is normally built through the root `docker-compose.yml`.
 
 ## Learn more
 

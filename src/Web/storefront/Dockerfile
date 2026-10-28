@@ -1,5 +1,7 @@
 # Build the Angular app, then serve the static bundle with nginx.
-FROM node:22-alpine AS build
+# Debian (glibc) rather than Alpine: the lockfile is generated on glibc platforms and some
+# native build dependencies (e.g. @napi-rs/lzma) have no musl binary recorded in it.
+FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
