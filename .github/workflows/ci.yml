@@ -28,6 +28,21 @@ jobs:
           dotnet test --solution aspnetcore-microservices.slnx -c Release --no-build
           --report-trx --coverage --coverage-output-format cobertura
           --results-directory TestResults
+      - name: Report failed tests as annotations
+        if: failure()
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          for path in glob.glob("TestResults/**/*.trx", recursive=True):
+              for result in ET.parse(path).getroot().iterfind(".//t:UnitTestResult", ns):
+                  if result.get("outcome") != "Failed":
+                      continue
+                  message = result.findtext(".//t:Message", default="", namespaces=ns)
+                  stack = result.findtext(".//t:StackTrace", default="", namespaces=ns)
+                  text = (message + "\n" + stack)[:3000].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+                  print(f"::error title={result.get('testName')}::{text}")
+          EOF
       - uses: actions/upload-artifact@v4
         if: always()
         with:
