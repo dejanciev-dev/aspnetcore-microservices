@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Yarp.ReverseProxy.Transforms;
 using Yarp.ReverseProxy.Transforms.Builder;
 
@@ -66,9 +67,12 @@ internal static class Bff
                 options.ResponseType = "code";
                 options.UsePkce = true;
 
+                // Keycloak returns the code with a top-level GET redirect rather than the default
+                // cross-site form POST, so the Lax cookies below are sent on the callback.
+                options.ResponseMode = OpenIdConnectResponseMode.Query;
+
                 // The defaults (SameSite=None; Secure) are dropped over plain HTTP, which breaks local
-                // sign-in with "Correlation failed". Keycloak returns the code with a top-level GET
-                // redirect, so Lax cookies are sent and remain safe.
+                // sign-in with "Correlation failed". With query response mode, Lax works and stays safe.
                 options.CorrelationCookie.SameSite = SameSiteMode.Lax;
                 options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
                 options.NonceCookie.SameSite = SameSiteMode.Lax;

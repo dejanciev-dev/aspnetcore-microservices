@@ -41,7 +41,7 @@ public sealed partial class BffLoginTests(Infrastructure infra)
         Assert.StartsWith(infra.KeycloakRealmUrl, challenge.Headers.Location!.ToString());
 
         // 2. Keycloak shows its login page; submit ada's credentials.
-        using var keycloak = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer() });
+        using var keycloak = new HttpClient(new BrowserCookieJar());
         var loginPage = await OpenKeycloakPageAsync(keycloak, challenge.Headers.Location!);
         var formAction = WebUtility.HtmlDecode(LoginFormAction().Match(loginPage).Groups["action"].Value);
         var login = await keycloak.PostAsync(formAction, new FormUrlEncodedContent(new Dictionary<string, string>
@@ -120,6 +120,37 @@ public sealed partial class BffLoginTests(Infrastructure infra)
 
     [GeneratedRegex("<form[^>]*action=\"(?<action>[^\"]+)\"")]
     private static partial Regex LoginFormAction();
+
+    /// <summary>
+    /// Keycloak marks its session cookies <c>Secure</c>. Browsers still send them to http://localhost
+    /// (a secure context), but <see cref="CookieContainer"/> won't over HTTP, so this jar keeps
+    /// cookies by name and sends them back regardless of the Secure flag, like a browser on localhost.
+    /// </summary>
+    private sealed class BrowserCookieJar() : DelegatingHandler(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+    {
+        private readonly Dictionary<string, string> _cookies = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (_cookies.Count > 0)
+                request.Headers.Add("Cookie", string.Join("; ", _cookies.Select(c => $"{c.Key}={c.Value}")));
+
+            var response = await base.SendAsync(request, cancellationToken);
+
+            foreach (var header in response.Headers.TryGetValues("Set-Cookie", out var values) ? values : [])
+            {
+                var pair = header.Split(';', 2)[0];
+                var name = pair.Split('=', 2)[0].Trim();
+                var value = pair.Contains('=') ? pair.Split('=', 2)[1] : "";
+                var expired = header.Contains("Max-Age=0", StringComparison.OrdinalIgnoreCase) || value.Length == 0;
+
+                if (expired) _cookies.Remove(name);
+                else _cookies[name] = value;
+            }
+
+            return response;
+        }
+    }
 
     /// <summary>A tiny real HTTP server standing in for a downstream API: it returns the Authorization header it received.</summary>
     private sealed class EchoAuthorizationServer(WebApplication app, string url) : IAsyncDisposable
