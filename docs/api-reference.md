@@ -176,6 +176,8 @@ All address fields are required.
 
 Returns `400` if the basket is empty.
 
+> **Asynchronous when RabbitMQ is configured.** Basket generates `orderId`, publishes a `BasketCheckedOut` event and responds once the broker confirms. Ordering creates the order shortly afterwards, so `GET /api/orders/{orderId}` may return `404` for a moment; poll briefly. Without a broker, Basket calls `POST /api/orders` synchronously and the order exists when the response arrives.
+
 ---
 
 ## Ordering

@@ -45,7 +45,7 @@ dotnet run --project src/Aspire/AppHost
 
 The AppHost ([`src/Aspire/AppHost/AppHost.cs`](../src/Aspire/AppHost/AppHost.cs)):
 
-1. starts a **PostgreSQL** container with two databases (`catalogdb`, `orderingdb`) and a **Redis** container, both with persistent data volumes (requires Docker or Podman);
+1. starts a **PostgreSQL** container with two databases (`catalogdb`, `orderingdb`), a **Redis** container and a **RabbitMQ** container (with its management UI linked from the dashboard), all with persistent data volumes (requires Docker or Podman);
 2. starts `catalog-api` and `ordering-api` once their database is ready, injecting `ConnectionStrings__catalogdb` / `__orderingdb`; they apply migrations on startup;
 3. starts `basket-api` once Redis, Catalog and Ordering are healthy;
 4. starts `api-gateway` once the services are healthy, and injects the real service URLs into the YARP cluster configuration;
@@ -68,15 +68,16 @@ dotnet run --project src/ApiGateways/ApiGateway
 npm start --prefix src/Web/storefront
 ```
 
-Every project uses the `http` launch profile with a fixed port (see [Ports](#ports)), so the defaults in `appsettings.json` line up with no extra configuration. With no connection strings set, **each service uses its in-memory store**, so no Docker is needed. Telemetry is not exported in this mode unless you set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+Every project uses the `http` launch profile with a fixed port (see [Ports](#ports)), so the defaults in `appsettings.json` line up with no extra configuration. With no connection strings set, **each service uses its in-memory store and checkout calls Ordering over HTTP**, so no Docker is needed. Telemetry is not exported in this mode unless you set `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 To use real databases in this mode, start only the infrastructure from Compose and point the services at it:
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d postgres redis rabbitmq
 export ConnectionStrings__catalogdb="Host=localhost;Database=catalogdb;Username=postgres;Password=postgres"
 export ConnectionStrings__orderingdb="Host=localhost;Database=orderingdb;Username=postgres;Password=postgres"
 export ConnectionStrings__redis="localhost:6379"
+export ConnectionStrings__rabbitmq="amqp://storefront:storefront@localhost:5672"
 # then run the services as above
 ```
 
@@ -90,10 +91,10 @@ The compose file builds:
 
 - one image per .NET project from the shared [`src/Dockerfile`](../src/Dockerfile): a multi-stage build that ends on `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled` (distroless, non-root, port 8080);
 - the storefront from [`src/Web/storefront/Dockerfile`](../src/Web/storefront/Dockerfile): an Angular production build served by nginx, which also proxies `/api` to the gateway;
-- **PostgreSQL 18** and **Redis 8** (AOF persistence) with health checks. The services wait until both report healthy before starting;
+- **PostgreSQL 18**, **Redis 8** (AOF persistence) and **RabbitMQ 4** (with the management plugin) with health checks. The services wait until their dependencies report healthy before starting;
 - a standalone **Aspire dashboard** container that receives OTLP telemetry from every service.
 
-Stop everything with `docker compose down`. Data is kept in the `postgres-data` and `redis-data` volumes; `docker compose down -v` resets it. Set `POSTGRES_PASSWORD` in a `.env` file to change the default password.
+Stop everything with `docker compose down`. Data is kept in the `postgres-data`, `redis-data` and `rabbitmq-data` volumes; `docker compose down -v` resets it. Set `POSTGRES_PASSWORD` / `RABBITMQ_PASSWORD` in a `.env` file to change the default passwords.
 
 ## Ports
 
@@ -107,6 +108,7 @@ Stop everything with `docker compose down`. Data is kept in the `postgres-data` 
 | Aspire dashboard | 15100 (AppHost) | 18888 |
 | PostgreSQL | dynamic (AppHost) | 5432 |
 | Redis | dynamic (AppHost) | 6379 |
+| RabbitMQ (AMQP / management UI) | dynamic (AppHost) | 5672 / 15672 |
 
 In Docker Compose only the gateway and the storefront are published. The services are reachable solely on the internal compose network, which is how they would run in production.
 
@@ -119,6 +121,7 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
 | `ConnectionStrings:redis` | Basket.API | *(unset → in-memory)* | StackExchange.Redis configuration string, e.g. `localhost:6379` |
+| `ConnectionStrings:rabbitmq` | Catalog, Basket, Ordering | *(unset → no messaging, HTTP checkout)* | AMQP URI, e.g. `amqp://user:pass@localhost:5672` |
 | `Services:Catalog` | Basket.API | `http://localhost:5101` | Base URL for product and price lookups |
 | `Services:Ordering` | Basket.API | `http://localhost:5103` | Base URL used to create orders on checkout |
 | `ReverseProxy:Clusters:{name}:Destinations:d1:Address` | ApiGateway | `http://localhost:510x` | Where each YARP cluster forwards to |
@@ -153,14 +156,18 @@ To look at the data with Docker Compose:
 ```bash
 docker compose exec postgres psql -U postgres -d catalogdb -c "select name, price from products"
 docker compose exec redis redis-cli --scan --pattern 'basket:*'
+docker compose exec postgres psql -U postgres -d catalogdb -c "select type, occurred_at, processed_at from outbox_messages"
+docker compose exec rabbitmq rabbitmqctl list_queues name messages consumers
 ```
+
+To watch messaging in action: change a product's price (`PUT /api/products/{id}` in Catalog's Scalar UI) while that product sits in a basket, then reload the basket. Queues, rates and dead-lettered messages are visible in the RabbitMQ management UI at http://localhost:15672.
 
 ## Running the tests
 
 The test projects use **xUnit v3** on **Microsoft.Testing.Platform** (opted in via `global.json`).
 
 ```bash
-# everything: 11 API tests + 9 PostgreSQL/Redis tests
+# everything: 11 API tests + 13 PostgreSQL/Redis/RabbitMQ tests
 dotnet test
 
 # with TRX reports and Cobertura coverage
@@ -171,7 +178,7 @@ cd src/Web/storefront
 npx ng test --watch=false
 ```
 
-`tests/Services.IntegrationTests` starts PostgreSQL and Redis with **Testcontainers**, so it needs Docker. Without Docker the 9 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
+`tests/Services.IntegrationTests` starts PostgreSQL, Redis and RabbitMQ with **Testcontainers**, so it needs Docker. Without Docker the 13 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
 
 See the "Testing" sections in [architecture.md](architecture.md#testing-strategy) and [frontend.md](frontend.md#testing) for what each suite covers.
 
@@ -211,6 +218,18 @@ Basket validates every product against Catalog. Use one of the seeded IDs (`4f1c
 <summary><b>Catalog/Ordering exits on startup with <code>NpgsqlException: Failed to connect</code></b></summary>
 
 A connection string is set but PostgreSQL isn't reachable. Start it (`docker compose up -d postgres`), check host, port and password, or unset `ConnectionStrings__catalogdb` / `__orderingdb` to fall back to in-memory.
+</details>
+
+<details>
+<summary><b>The order page keeps saying "Your order is being processed…"</b></summary>
+
+With RabbitMQ, Ordering creates the order from the `BasketCheckedOut` message. If it never appears, check that Ordering.API is running and consuming (`rabbitmqctl list_queues name messages consumers` should show a consumer on `ordering-api.basket.checked-out`), and look in `ordering-api.basket.checked-out.dlq` for messages whose handler failed.
+</details>
+
+<details>
+<summary><b>A service exits with <code>BrokerUnreachableException</code></b></summary>
+
+`ConnectionStrings__rabbitmq` is set but RabbitMQ isn't reachable, or the credentials are wrong. Note that RabbitMQ's default `guest` user can only connect from localhost, which is why Compose creates a `storefront` user.
 </details>
 
 <details>

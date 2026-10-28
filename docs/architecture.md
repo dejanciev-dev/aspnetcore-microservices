@@ -6,6 +6,7 @@ This document explains how the system is put together and why. For setup instruc
 - [Services](#services)
 - [Communication](#communication)
 - [Persistence](#persistence)
+- [Messaging](#messaging)
 - [Request flows](#request-flows)
 - [Cross-cutting concerns](#cross-cutting-concerns)
 - [Design decisions](#design-decisions)
@@ -29,11 +30,14 @@ flowchart TB
     catalogdb[(PostgreSQL · catalogdb)]
     orderingdb[(PostgreSQL · orderingdb)]
     redis[(Redis)]
+    mq{{RabbitMQ}}
 
     browser --> spa --> gw
     gw --> catalog & basket & ordering
-    basket --> catalog
-    basket --> ordering
+    basket -- HTTP --> catalog
+    catalog -. events .-> mq
+    basket -. events .-> mq
+    mq -. events .-> basket & ordering
     catalog --> catalogdb
     ordering --> orderingdb
     basket --> redis
@@ -121,7 +125,8 @@ Describes the whole system as code: which projects run, how they find each other
 | Browser → Gateway | REST/JSON over HTTP | Simple, cacheable, debuggable |
 | Gateway → Services | Reverse proxy | Path-based routing; services stay private |
 | Basket → Catalog | Synchronous HTTP (query) | The price must be current when an item is added |
-| Basket → Ordering | Synchronous HTTP (command) | The user expects an order ID immediately after checkout |
+| Catalog → Basket | `ProductPriceChanged` event over RabbitMQ | Catalog shouldn't know who caches its prices; Basket reacts on its own schedule |
+| Basket → Ordering | `BasketCheckedOut` event over RabbitMQ (HTTP fallback without a broker) | Checkout mustn't depend on Ordering being up; the order ID is generated up front |
 
 All outgoing `HttpClient`s get the **standard resilience pipeline** from `Microsoft.Extensions.Http.Resilience`: rate limiter, total timeout, retry with exponential backoff and jitter, circuit breaker and per-attempt timeout. A brief Catalog hiccup becomes a retry, not a failed request.
 
@@ -188,6 +193,89 @@ erDiagram
 
 The public `Order` / `OrderItem` / `ShippingAddress` records stay immutable and free of persistence concerns. EF works with internal `OrderEntity` / `OrderLineEntity` classes and maps to and from the records at the repository boundary. The shipping address is an EF **complex type**: a value object stored as columns on `orders`, with no table or key of its own. Order lines have their own identity key, so the same product may legitimately appear twice.
 
+## Messaging
+
+Integration events go through **RabbitMQ** using the official **RabbitMQ.Client 7** async API, wrapped in `BuildingBlocks.Messaging`. Like the databases, messaging switches on when `ConnectionStrings:rabbitmq` is set.
+
+### Topology
+
+```mermaid
+flowchart LR
+    subgraph publishers [Publishers]
+        cat[Catalog.API<br/>outbox relay]
+        bas1[Basket.API]
+    end
+
+    ex{{"storefront.events<br/>(topic exchange)"}}
+
+    subgraph queues [Durable queues, one per subscriber]
+        q1[basket-api.catalog.product-price-changed]
+        q2[ordering-api.basket.checked-out]
+    end
+
+    dlx{{"storefront.events.dlx"}}
+    dlq1[basket-api.….dlq]
+    dlq2[ordering-api.….dlq]
+
+    cat -- "catalog.product-price-changed" --> ex
+    bas1 -- "basket.checked-out" --> ex
+    ex --> q1 --> basket2[Basket.API consumer]
+    ex --> q2 --> ord[Ordering.API consumer]
+    q1 -. "rejected" .-> dlx
+    q2 -. "rejected" .-> dlx
+    dlx --> dlq1 & dlq2
+```
+
+- **One topic exchange**; the routing key is the event's stable name from `[EventName("…")]`.
+- **Each subscribing service owns a durable queue** named `<service>.<event>`. Adding a new subscriber never affects existing ones, and a service that is down simply accumulates messages.
+- **Dead-lettering:** each queue has an `x-dead-letter-exchange`. A message whose handler still fails after 3 in-process retries (200 ms, 1 s, 3 s), or that can't be deserialized, is rejected into `<queue>.dlq` for inspection instead of blocking the queue.
+- **Events are owned per service.** Catalog, Basket and Ordering each declare their own copy of the records they publish or consume; only the JSON shape and the name must match. Services share no assembly with event types.
+
+### Reliability guarantees
+
+| Concern | How |
+|---|---|
+| Message survives a broker restart | Durable exchange and queues, `DeliveryMode = Persistent` |
+| Publisher knows the broker has it | **Publisher confirms**: `PublishAsync` completes only after the broker's ack and throws on a nack |
+| Event is never lost or sent for a rolled-back change | **Transactional outbox** (Catalog) |
+| Consumer crash doesn't lose a message | Manual acks after the handler succeeds; unacked messages are redelivered |
+| Redelivery doesn't duplicate side effects | **Idempotent consumers**: Ordering keys orders by the event's `OrderId`; repricing is naturally idempotent |
+| One trace across services | W3C `traceparent` is injected into message headers on publish and extracted on consume (including from the outbox, which stores it) |
+
+### Transactional outbox
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant API as PUT /api/products/{id}
+    participant DB as PostgreSQL (catalogdb)
+    participant R as Outbox relay (BackgroundService)
+    participant MQ as RabbitMQ
+
+    API->>DB: BEGIN
+    API->>DB: SELECT price … FOR UPDATE
+    API->>DB: UPDATE products SET …
+    API->>DB: INSERT INTO outbox_messages (ProductPriceChanged)
+    API->>DB: COMMIT
+    loop every second
+        R->>DB: SELECT … WHERE processed_at IS NULL FOR UPDATE SKIP LOCKED
+        R->>MQ: publish (wait for confirm)
+        R->>DB: UPDATE outbox_messages SET processed_at = now()
+    end
+```
+
+Publishing directly after `SaveChanges` would fail in one of two ways: a crash in between loses the event, and publishing first could announce a change that then rolls back. The outbox makes the event part of the same atomic write. `FOR UPDATE SKIP LOCKED` lets several Catalog replicas run the relay without publishing the same row twice. Delivery is still *at-least-once* (a crash after publish but before marking the row re-sends it), which is why consumers are idempotent.
+
+### Asynchronous checkout
+
+Basket has no relational database, so instead of an outbox it relies on **publisher confirms**:
+
+1. Generate the `OrderId`.
+2. Publish `BasketCheckedOut` and wait for the broker's confirmation. If that fails, the request fails and the basket is untouched.
+3. Delete the basket and return `{ orderId, total }`.
+
+Ordering consumes the event and inserts the order **only if that ID doesn't exist yet**: an existence check plus a unique-key violation guard for concurrent deliveries. The storefront navigates to `/orders/{id}?placed=true` and shows a "processing" state, polling until the order appears (usually well under a second).
+
 ## Request flows
 
 ### Add to basket
@@ -213,7 +301,7 @@ sequenceDiagram
     end
 ```
 
-### Checkout
+### Checkout (with RabbitMQ)
 
 ```mermaid
 sequenceDiagram
@@ -221,20 +309,27 @@ sequenceDiagram
     participant UI as Storefront
     participant GW as Gateway
     participant B as Basket.API
+    participant MQ as RabbitMQ
     participant O as Ordering.API
 
     UI->>GW: POST /api/basket/ada/checkout {shippingAddress}
     GW->>B: forward
-    B->>B: load cart (400 if empty)
-    B->>O: POST /api/orders {userName, items, shippingAddress}
-    O->>O: create Order (status = Submitted)
-    O-->>B: 201 Created {id, total}
+    B->>B: load cart (400 if empty), new orderId
+    B->>MQ: publish BasketCheckedOut {orderId, items, address}
+    MQ-->>B: confirm
     B->>B: delete cart
     B-->>UI: 200 {orderId, total}
-    UI->>UI: navigate to /orders/{orderId}
+    UI->>GW: GET /api/orders/{orderId} (polls while 404)
+    MQ->>O: deliver BasketCheckedOut
+    O->>O: insert order if orderId is new
+    O-->>MQ: ack
+    UI->>GW: GET /api/orders/{orderId}
+    GW-->>UI: 200 Order
 ```
 
-Because OpenTelemetry propagates W3C trace context through the gateway and every `HttpClient`, these flows appear as **single end-to-end traces** in the Aspire dashboard.
+Without a broker the same endpoint calls `POST /api/orders` on Ordering synchronously. The switch is a different `IOrderingClient` implementation registered at startup, so the endpoint code is identical in both modes.
+
+Because OpenTelemetry propagates W3C trace context through the gateway, every `HttpClient` and every RabbitMQ message, these flows appear as **single end-to-end traces** in the Aspire dashboard.
 
 ## Cross-cutting concerns
 
@@ -283,9 +378,21 @@ Catalog and Ordering get EF Core's migrations, LINQ translation and change track
 </details>
 
 <details>
-<summary><b>Synchronous checkout (for now)</b></summary>
+<summary><b>Asynchronous checkout with a client-generated order ID</b></summary>
 
-Checkout calls Ordering synchronously because the UI needs an order ID right away, and it keeps the demo easy to follow. The trade-off: if Ordering is down, checkout fails (after retries). The roadmap moves to an asynchronous `BasketCheckedOut` event with an outbox for at-least-once delivery.
+The UI wants an order ID right away, which previously forced a synchronous call to Ordering. Generating the ID in Basket removes that coupling: Basket can answer as soon as the broker has the message, Ordering can be down or slow, and the ID doubles as the idempotency key. The cost is eventual consistency: the order shows up a moment later, which the UI handles with a short "processing" state.
+</details>
+
+<details>
+<summary><b>RabbitMQ.Client instead of MassTransit</b></summary>
+
+MassTransit v9 moved to a commercial license, and the open-source v8 line is nearing its end of support. The official client plus a building block of under 500 lines (publisher confirms, consumer host with retries and DLQ, outbox, tracing) keeps the project free of licensing questions, and every pattern stays visible in the source. A team that wants sagas, scheduling or transport abstraction would reasonably choose MassTransit, Wolverine or NServiceBus instead.
+</details>
+
+<details>
+<summary><b>Outbox for Catalog, publisher confirms for Basket</b></summary>
+
+An outbox needs a transactional store next to the business data. Catalog has PostgreSQL, so its events are written atomically with the change. Basket keeps carts in Redis, so it publishes directly and only deletes the cart after the broker confirms; a failure leaves the cart intact and the user can retry.
 </details>
 
 <details>
@@ -307,6 +414,7 @@ One origin means no CORS, a single place for future auth, rate limiting and cach
 | Service API | xUnit v3, `WebApplicationFactory<TMarker>` (in-memory stores) | Real HTTP pipeline: routing, validation, status codes, JSON contracts |
 | Service isolation | `ConfigureTestServices` with fake typed clients | Basket logic without running Catalog or Ordering |
 | Persistence | Testcontainers (PostgreSQL 18, Redis 8) | Migrations and seeding, SQL filtering and paging, `ILIKE` escaping, data surviving an app restart, Redis TTL and case-insensitive keys |
+| Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
 | Containers | GitHub Actions `docker compose build` | Every image builds from a clean checkout |
@@ -319,5 +427,8 @@ These are intentional simplifications for a demo:
 - **Migrations run at startup.** That is fine for one replica; with several, run migrations as a separate deployment step.
 - **Basket updates are last-write-wins.** Two simultaneous "add item" requests for the same user can overwrite each other. Redis transactions (`WATCH`/`MULTI`) or a hash per basket would fix this.
 - **In-memory fallback** (when no connection string is set) loses data on restart and must not be scaled out.
-- **No distributed transaction on checkout.** If Ordering succeeds but the response is lost, a retry could create a duplicate order. An idempotency key or the outbox pattern on the roadmap fixes this.
+- **Basket publish-then-delete isn't atomic.** If Basket crashes after the broker confirms but before the cart is deleted, the order is still created; the cart just stays around until the user clears it.
+- **No dead-letter tooling.** Failed messages land in `<queue>.dlq`, but replaying them means using the RabbitMQ management UI.
+- **The outbox is never pruned.** Processed rows stay in `outbox_messages`; production would delete them after a retention period.
+- **HTTP checkout fallback (no broker)** keeps the old trade-off: if Ordering's response is lost, a retry could create a second order.
 - **Product deletion** does not affect existing baskets; they keep a snapshot of name and price.

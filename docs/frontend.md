@@ -21,7 +21,7 @@ The storefront in [`src/Web/storefront`](../src/Web/storefront) is a single-page
 | Basket | `/basket` | Basket.API |
 | Checkout with a validated address form | `/checkout` | Basket.API → Ordering.API |
 | Order history | `/orders` | Ordering.API |
-| Order confirmation and details | `/orders/:id` | Ordering.API |
+| Order confirmation and details (polls while an async order is processed) | `/orders/:id` | Ordering.API |
 
 The header shows a live basket badge and an editable **user name**. Without authentication, this name keys the basket and the orders, and it is stored in `localStorage`.
 
@@ -104,6 +104,16 @@ protected readonly address = form(this.model, (path) => {
 
 > Signal Forms are marked **experimental** in Angular 21. They are used here on purpose, to show where Angular forms are heading.
 
+### Handling eventual consistency
+
+With RabbitMQ, checkout returns an order ID **before** Ordering has created the order (see [architecture.md](architecture.md#asynchronous-checkout)). [`OrderDetail`](../src/Web/storefront/src/app/features/orders/order-detail.ts) handles this:
+
+- when it arrives with `?placed=true` and the API answers `404`, a `processing` computed signal shows "Your order is being processed…" instead of an error;
+- an `effect()` schedules `order.reload()` once a second (cleaned up via `onCleanup`), for up to 20 attempts;
+- because `processing` also stays true while a reload is in flight, the page doesn't flicker back to a skeleton between attempts.
+
+Without `placed`, a 404 is shown as "Order not found." straight away.
+
 ### Modern template syntax
 
 The templates use built-in control flow (`@if`, `@else if`, `@for … track`), `@let` for local aliases, and lazy-loaded routes with `loadComponent`. View transitions are enabled with `withViewTransitions()`.
@@ -140,6 +150,7 @@ Tests use **Vitest** through the Angular CLI (`@angular/build:unit-test`) with `
 | `features/catalog/product-list.spec.ts` | Query params become request params; cards, active chip and pager render; unreachable-gateway message |
 | `features/checkout/checkout-page.spec.ts` | Signal Form validation blocks submit; a valid form posts the exact address |
 | `features/orders/order-list.spec.ts` | Orders are requested for the current user and rendered |
+| `features/orders/order-detail.spec.ts` | After checkout a 404 shows "processing" and polls until the order exists; without `placed` a 404 is an immediate "not found" |
 
 HTTP is faked with `HttpTestingController`. Because `httpResource` registers pending tasks, the specs flush requests first and then `await ApplicationRef.whenStable()`.
 

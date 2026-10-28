@@ -11,6 +11,7 @@
 ![Aspire](https://img.shields.io/badge/.NET%20Aspire-13-512BD4)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-8-FF4438?logo=redis&logoColor=white)
+![RabbitMQ](https://img.shields.io/badge/RabbitMQ-4-FF6600?logo=rabbitmq&logoColor=white)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-425CC7?logo=opentelemetry&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -27,6 +28,7 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 
 - **Small, independent services**, each owning its data store and HTTP contract (*database per service*)
 - **Polyglot persistence**: PostgreSQL + EF Core 10 for catalog and orders, Redis for baskets
+- **Event-driven integration over RabbitMQ**: a transactional outbox, idempotent consumers, dead-letter queues and asynchronous checkout
 - **A single entry point** (YARP reverse proxy), so the browser only talks to one origin
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
@@ -62,6 +64,7 @@ flowchart LR
         orderingdb[(PostgreSQL<br/>orderingdb)]
     end
 
+    mq{{RabbitMQ<br/>storefront.events}}
     otel[(Aspire Dashboard<br/>OTLP · logs · traces · metrics)]
 
     user --> spa
@@ -69,8 +72,11 @@ flowchart LR
     gw -- "/api/products/**" --> catalog
     gw -- "/api/basket/**" --> basket
     gw -- "/api/orders/**" --> ordering
-    basket -- "price lookup" --> catalog
-    basket -- "create order on checkout" --> ordering
+    basket -- "price lookup (HTTP)" --> catalog
+    catalog -. "ProductPriceChanged<br/>(via outbox)" .-> mq
+    basket -. "BasketCheckedOut" .-> mq
+    mq -. "ProductPriceChanged" .-> basket
+    mq -. "BasketCheckedOut" .-> ordering
     catalog --- catalogdb
     basket --- redis
     ordering --- orderingdb
@@ -80,11 +86,12 @@ flowchart LR
 
 | Component | Responsibility | Highlights |
 |---|---|---|
-| **Catalog.API** | Products, categories, search and paging | **PostgreSQL** via EF Core 10; migrations, seeding, `ILIKE` search, `ExecuteUpdate`/`ExecuteDelete` |
-| **Basket.API** | Per-user shopping cart and checkout | **Redis** with a sliding 30-day expiry; typed `HttpClient`s; **never trusts client prices** |
-| **Ordering.API** | Order creation and history | **PostgreSQL** via EF Core 10; persistence model separate from API records; `TimeProvider` |
+| **Catalog.API** | Products, categories, search and paging | **PostgreSQL** via EF Core 10; migrations, seeding, `ILIKE` search; publishes `ProductPriceChanged` through a **transactional outbox** |
+| **Basket.API** | Per-user shopping cart and checkout | **Redis** with a sliding 30-day expiry; **never trusts client prices**; reprices carts on events; **asynchronous checkout** |
+| **Ordering.API** | Order creation and history | **PostgreSQL** via EF Core 10; creates orders from `BasketCheckedOut` **idempotently** |
 | **ApiGateway** | Single public entry point | YARP reverse proxy, config-driven routes |
 | **BuildingBlocks.Common** | Shared cross-cutting concerns | OpenAPI + Scalar, ProblemDetails, health checks, resilience, OpenTelemetry |
+| **BuildingBlocks.Messaging** | Integration events | RabbitMQ.Client 7 publisher (confirms) and consumer host (retries, DLQ), EF Core outbox + relay, trace propagation |
 | **AppHost** | Local orchestration | .NET Aspire 13: starts everything, wires URLs, hosts the dashboard |
 | **Storefront** | Customer-facing SPA | Angular 21, zoneless, signals, `httpResource`, Signal Forms |
 
@@ -98,6 +105,7 @@ flowchart LR
 | **APIs** | ASP.NET Core Minimal APIs, `TypedResults`, built-in validation (`AddValidation`), ProblemDetails (RFC 9457) |
 | **API docs** | `Microsoft.AspNetCore.OpenApi` + [Scalar](https://scalar.com/) UI |
 | **Data** | PostgreSQL 18 + EF Core 10 (Npgsql), Redis 8 (StackExchange.Redis), Aspire client integrations |
+| **Messaging** | RabbitMQ 4 with RabbitMQ.Client 7 (async API), transactional outbox, Aspire RabbitMQ integration |
 | **Gateway** | [YARP](https://microsoft.github.io/reverse-proxy/) 2.3 |
 | **Resilience** | `Microsoft.Extensions.Http.Resilience` (Polly v8 standard pipeline) |
 | **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter |
@@ -115,7 +123,7 @@ flowchart LR
 |---|---|---|
 | [.NET SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 10.0.100+ | everything (pinned in [`global.json`](global.json)) |
 | [Node.js](https://nodejs.org/) | 22 LTS | the Angular storefront |
-| [Docker](https://www.docker.com/) | recommended | PostgreSQL and Redis (Aspire or Compose) and the integration tests |
+| [Docker](https://www.docker.com/) | recommended | PostgreSQL, Redis and RabbitMQ (Aspire or Compose) and the integration tests |
 
 ```bash
 git clone https://github.com/dejanciev-dev/aspnetcore-microservices.git
@@ -129,9 +137,9 @@ cd src/Web/storefront && npm install && cd ../../..
 dotnet run --project src/Aspire/AppHost
 ```
 
-One command starts **PostgreSQL and Redis containers**, all three services, the gateway and the Angular dev server. It wires connection strings and URLs together and opens the **Aspire dashboard**, which shows live logs, metrics and **distributed traces** of a checkout flowing Gateway → Basket → Redis/Catalog/Ordering → PostgreSQL.
+One command starts **PostgreSQL, Redis and RabbitMQ containers**, all three services, the gateway and the Angular dev server. It wires connection strings and URLs together and opens the **Aspire dashboard**, which shows live logs, metrics and **distributed traces**. A single trace follows a checkout from the gateway through Basket, across RabbitMQ and into Ordering's database insert.
 
-### Option 2: run each project yourself (no Docker, in-memory stores)
+### Option 2: run each project yourself (no Docker: in-memory stores, HTTP checkout)
 
 ```bash
 # four terminals (or use your IDE's multi-project launch)
@@ -144,7 +152,7 @@ dotnet run --project src/ApiGateways/ApiGateway
 cd src/Web/storefront && npm start
 ```
 
-### Option 3: Docker Compose (everything, including PostgreSQL and Redis)
+### Option 3: Docker Compose (everything, including PostgreSQL, Redis and RabbitMQ)
 
 ```bash
 docker compose up --build
@@ -163,6 +171,7 @@ On first start, Catalog and Ordering apply their EF Core migrations and Catalog 
 | http://localhost:5103/scalar | 📘 Ordering API docs |
 | http://localhost:18888 | 📈 Aspire dashboard (Docker Compose) |
 | `localhost:5432` / `localhost:6379` | 🐘 PostgreSQL / 🟥 Redis (Docker Compose) |
+| http://localhost:15672 | 🐇 RabbitMQ management UI, `storefront` / `storefront` (Docker Compose) |
 
 ➡️ Detailed setup, configuration and troubleshooting: **[docs/getting-started.md](docs/getting-started.md)**.
 
@@ -179,7 +188,7 @@ All routes are reachable through the gateway at `http://localhost:5100`.
 | `GET` | `/api/basket/{userName}` | Current basket |
 | `POST` | `/api/basket/{userName}/items` | Add an item (price is looked up in Catalog) |
 | `DELETE` | `/api/basket/{userName}/items/{productId}` | Remove an item |
-| `POST` | `/api/basket/{userName}/checkout` | Turn the basket into an order |
+| `POST` | `/api/basket/{userName}/checkout` | Turn the basket into an order (via RabbitMQ when available) |
 | `GET` | `/api/orders?userName=` | A user's orders, newest first |
 | `GET` | `/api/orders/{id}` | Order details |
 
@@ -195,6 +204,21 @@ curl -X POST http://localhost:5100/api/basket/ada/checkout \
 ```
 
 ➡️ Full reference with request and response examples: **[docs/api-reference.md](docs/api-reference.md)**.
+
+## 📨 Messaging
+
+| Event | Publisher | Consumer | Purpose |
+|---|---|---|---|
+| `catalog.product-price-changed` | Catalog (**transactional outbox**) | Basket | Reprice carts that hold the product |
+| `basket.checked-out` | Basket | Ordering | Create the order **asynchronously and idempotently** |
+
+- **Transactional outbox:** Catalog writes the price change and the event in **one PostgreSQL transaction**. A background relay publishes pending rows, claiming them with `FOR UPDATE SKIP LOCKED` so several replicas can share the work. An event can never be lost, nor sent for a rolled-back change.
+- **Asynchronous checkout:** Basket publishes `BasketCheckedOut` with a **pre-generated order ID** (after the broker confirms) and answers immediately. Ordering creates the order when it receives the message; redelivered messages map to the same ID and are ignored. Checkout keeps working while Ordering is down.
+- **Reliability:** durable queues, persistent messages, publisher confirms, manual acks, in-process retries, then a **dead-letter queue** per subscription.
+- **Observability:** W3C trace context travels in message headers, so producer and consumer spans join the same distributed trace.
+- **Without a broker** (plain `dotnet run`), checkout falls back to the synchronous HTTP call and no events are published.
+
+➡️ Details and sequence diagrams: [docs/architecture.md](docs/architecture.md#messaging).
 
 ## 🖥️ Front end
 
@@ -213,12 +237,12 @@ The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Ang
 ## 🧪 Testing
 
 ```bash
-dotnet test                                          # 11 API tests + 9 database tests (xUnit v3)
-cd src/Web/storefront && npx ng test --watch=false   # 9 unit/component tests (Vitest)
+dotnet test                                          # 11 API tests + 13 database/messaging tests (xUnit v3)
+cd src/Web/storefront && npx ng test --watch=false   # 11 unit/component tests (Vitest)
 ```
 
 - **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. Downstream services are replaced by fakes, so Basket is tested without Catalog or Ordering running.
-- **Database tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18 and Redis 8 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across app restarts and Redis expiry. Without Docker they are skipped locally; in CI they must run.
+- **Integration tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18, Redis 8 and RabbitMQ 4 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across restarts and Redis expiry. They also run **end-to-end messaging flows across two live services**: a price change repricing a basket via the outbox, checkout creating an order via RabbitMQ, and a duplicate message producing exactly one order. Without Docker they are skipped locally; in CI they must run.
 - **Front end:** stores and components are tested with `HttpTestingController`, covering request shapes, rendering, validation and error states.
 - **CI** runs both suites and builds every Docker image on each push and pull request.
 
@@ -229,7 +253,9 @@ aspnetcore-microservices/
 ├── src/
 │   ├── ApiGateways/ApiGateway/          # YARP reverse proxy
 │   ├── Aspire/AppHost/                  # .NET Aspire orchestration
-│   ├── BuildingBlocks/BuildingBlocks.Common/  # shared service defaults
+│   ├── BuildingBlocks/
+│   │   ├── BuildingBlocks.Common/       # shared service defaults
+│   │   └── BuildingBlocks.Messaging/    # RabbitMQ publisher/consumer, outbox
 │   ├── Services/
 │   │   ├── Catalog/Catalog.API/         # products
 │   │   ├── Basket/Basket.API/           # carts & checkout
@@ -238,7 +264,7 @@ aspnetcore-microservices/
 │   └── Dockerfile                       # shared image for all .NET services
 ├── tests/
 │   ├── Services.Tests/                  # API tests (in-memory, fast)
-│   └── Services.IntegrationTests/       # PostgreSQL + Redis via Testcontainers
+│   └── Services.IntegrationTests/       # PostgreSQL, Redis, RabbitMQ via Testcontainers
 ├── docs/                                # architecture, API, front end, setup
 ├── docker-compose.yml
 ├── global.json                          # SDK pin + Microsoft.Testing.Platform opt-in
@@ -251,7 +277,7 @@ Each service follows the same layout: `Program.cs` (composition root), `Endpoint
 ## 🗺️ Roadmap
 
 - [x] Real persistence: PostgreSQL + EF Core (Catalog, Ordering), Redis (Basket), provisioned by Aspire and Compose
-- [ ] Asynchronous messaging (RabbitMQ / MassTransit) with an outbox, e.g. `OrderSubmitted` events
+- [x] Asynchronous messaging over RabbitMQ with a transactional outbox and idempotent consumers
 - [ ] Authentication with Keycloak / Entra ID (OIDC), replacing the demo user name
 - [ ] Rate limiting and output caching at the gateway
 - [ ] Contract tests between Basket and its downstream services
