@@ -9,6 +9,8 @@
 ![C#](https://img.shields.io/badge/C%23-14-239120?logo=csharp&logoColor=white)
 ![Angular](https://img.shields.io/badge/Angular-21-DD0031?logo=angular&logoColor=white)
 ![Aspire](https://img.shields.io/badge/.NET%20Aspire-13-512BD4)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-8-FF4438?logo=redis&logoColor=white)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-425CC7?logo=opentelemetry&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -23,7 +25,8 @@ This repository is a small but complete **microservices storefront**. You browse
 
 The goal is to show **current, production-minded practices** for .NET and Angular. The domain is kept small so the architecture stays easy to read:
 
-- **Small, independent services**, each owning its data and HTTP contract
+- **Small, independent services**, each owning its data store and HTTP contract (*database per service*)
+- **Polyglot persistence**: PostgreSQL + EF Core 10 for catalog and orders, Redis for baskets
 - **A single entry point** (YARP reverse proxy), so the browser only talks to one origin
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
@@ -31,7 +34,7 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 - **A modern Angular front end** that is zoneless, signal-based and uses `httpResource` and Signal Forms
 - **Automated quality gates**: integration tests, component tests and GitHub Actions CI
 
-> Every service uses an in-memory store, so the whole system runs with **zero infrastructure**. Each repository sits behind an interface, ready to be swapped for PostgreSQL, MongoDB or Redis (see the [roadmap](#-roadmap)).
+> **Zero-infrastructure fallback:** a service uses its database only when a connection string is configured, which Aspire and Docker Compose do automatically. Without one (plain `dotnet run`, the fast test suite) it falls back to an in-memory store, so you can still clone and run the whole system in seconds without Docker.
 
 ## 🏗️ Architecture
 
@@ -53,6 +56,12 @@ flowchart LR
         ordering[Ordering.API<br/><sub>:5103</sub>]
     end
 
+    subgraph data [Data stores]
+        catalogdb[(PostgreSQL<br/>catalogdb)]
+        redis[(Redis<br/>baskets)]
+        orderingdb[(PostgreSQL<br/>orderingdb)]
+    end
+
     otel[(Aspire Dashboard<br/>OTLP · logs · traces · metrics)]
 
     user --> spa
@@ -62,15 +71,18 @@ flowchart LR
     gw -- "/api/orders/**" --> ordering
     basket -- "price lookup" --> catalog
     basket -- "create order on checkout" --> ordering
+    catalog --- catalogdb
+    basket --- redis
+    ordering --- orderingdb
 
     catalog & basket & ordering & gw -. telemetry .-> otel
 ```
 
 | Component | Responsibility | Highlights |
 |---|---|---|
-| **Catalog.API** | Products, categories, search and paging | CRUD, filtering, `PagedResult<T>`, built-in validation |
-| **Basket.API** | Per-user shopping cart and checkout | Typed `HttpClient`s; **never trusts client prices** (resolves them from Catalog) |
-| **Ordering.API** | Order creation and history | `TimeProvider` for testable time, structured logging |
+| **Catalog.API** | Products, categories, search and paging | **PostgreSQL** via EF Core 10; migrations, seeding, `ILIKE` search, `ExecuteUpdate`/`ExecuteDelete` |
+| **Basket.API** | Per-user shopping cart and checkout | **Redis** with a sliding 30-day expiry; typed `HttpClient`s; **never trusts client prices** |
+| **Ordering.API** | Order creation and history | **PostgreSQL** via EF Core 10; persistence model separate from API records; `TimeProvider` |
 | **ApiGateway** | Single public entry point | YARP reverse proxy, config-driven routes |
 | **BuildingBlocks.Common** | Shared cross-cutting concerns | OpenAPI + Scalar, ProblemDetails, health checks, resilience, OpenTelemetry |
 | **AppHost** | Local orchestration | .NET Aspire 13: starts everything, wires URLs, hosts the dashboard |
@@ -85,12 +97,13 @@ flowchart LR
 | **Runtime** | .NET 10 (LTS), C# 14 |
 | **APIs** | ASP.NET Core Minimal APIs, `TypedResults`, built-in validation (`AddValidation`), ProblemDetails (RFC 9457) |
 | **API docs** | `Microsoft.AspNetCore.OpenApi` + [Scalar](https://scalar.com/) UI |
+| **Data** | PostgreSQL 18 + EF Core 10 (Npgsql), Redis 8 (StackExchange.Redis), Aspire client integrations |
 | **Gateway** | [YARP](https://microsoft.github.io/reverse-proxy/) 2.3 |
 | **Resilience** | `Microsoft.Extensions.Http.Resilience` (Polly v8 standard pipeline) |
 | **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter |
 | **Orchestration** | .NET Aspire 13 AppHost, Aspire Dashboard |
 | **Front end** | Angular 21, TypeScript 5.9, standalone components, signals, `httpResource`, Signal Forms, SCSS |
-| **Testing** | xUnit + `WebApplicationFactory` (backend), Vitest + Angular TestBed (front end) |
+| **Testing** | xUnit v3 on Microsoft.Testing.Platform, `WebApplicationFactory`, **Testcontainers** (real PostgreSQL and Redis), Vitest + Angular TestBed |
 | **Containers** | Multi-stage Dockerfiles, **chiseled** (distroless, non-root) .NET images, nginx |
 | **CI** | GitHub Actions: build, test and coverage for .NET and Angular, plus Docker image builds |
 
@@ -102,7 +115,7 @@ flowchart LR
 |---|---|---|
 | [.NET SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 10.0.100+ | everything (pinned in [`global.json`](global.json)) |
 | [Node.js](https://nodejs.org/) | 22 LTS | the Angular storefront |
-| [Docker](https://www.docker.com/) | optional | the container option |
+| [Docker](https://www.docker.com/) | recommended | PostgreSQL and Redis (Aspire or Compose) and the integration tests |
 
 ```bash
 git clone https://github.com/dejanciev-dev/aspnetcore-microservices.git
@@ -116,9 +129,9 @@ cd src/Web/storefront && npm install && cd ../../..
 dotnet run --project src/Aspire/AppHost
 ```
 
-One command starts all three services, the gateway and the Angular dev server, wires their URLs together and opens the **Aspire dashboard**. The dashboard shows live logs, metrics and **distributed traces** of a checkout flowing Gateway → Basket → Catalog/Ordering.
+One command starts **PostgreSQL and Redis containers**, all three services, the gateway and the Angular dev server. It wires connection strings and URLs together and opens the **Aspire dashboard**, which shows live logs, metrics and **distributed traces** of a checkout flowing Gateway → Basket → Redis/Catalog/Ordering → PostgreSQL.
 
-### Option 2: run each project yourself
+### Option 2: run each project yourself (no Docker, in-memory stores)
 
 ```bash
 # four terminals (or use your IDE's multi-project launch)
@@ -131,11 +144,13 @@ dotnet run --project src/ApiGateways/ApiGateway
 cd src/Web/storefront && npm start
 ```
 
-### Option 3: Docker Compose
+### Option 3: Docker Compose (everything, including PostgreSQL and Redis)
 
 ```bash
 docker compose up --build
 ```
+
+On first start, Catalog and Ordering apply their EF Core migrations and Catalog seeds its products. Data lives in named volumes, so it survives `docker compose down` (use `down -v` to reset).
 
 ### Where to go
 
@@ -147,6 +162,7 @@ docker compose up --build
 | http://localhost:5102/scalar | 📘 Basket API docs |
 | http://localhost:5103/scalar | 📘 Ordering API docs |
 | http://localhost:18888 | 📈 Aspire dashboard (Docker Compose) |
+| `localhost:5432` / `localhost:6379` | 🐘 PostgreSQL / 🟥 Redis (Docker Compose) |
 
 ➡️ Detailed setup, configuration and troubleshooting: **[docs/getting-started.md](docs/getting-started.md)**.
 
@@ -197,11 +213,12 @@ The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Ang
 ## 🧪 Testing
 
 ```bash
-dotnet test                                          # 11 integration tests (xUnit + WebApplicationFactory)
+dotnet test                                          # 11 API tests + 9 database tests (xUnit v3)
 cd src/Web/storefront && npx ng test --watch=false   # 9 unit/component tests (Vitest)
 ```
 
-- **Backend:** each service is booted in memory with `WebApplicationFactory`. Downstream services are replaced by fakes, so Basket is tested without Catalog or Ordering running.
+- **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. Downstream services are replaced by fakes, so Basket is tested without Catalog or Ordering running.
+- **Database tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18 and Redis 8 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across app restarts and Redis expiry. Without Docker they are skipped locally; in CI they must run.
 - **Front end:** stores and components are tested with `HttpTestingController`, covering request shapes, rendering, validation and error states.
 - **CI** runs both suites and builds every Docker image on each push and pull request.
 
@@ -219,18 +236,21 @@ aspnetcore-microservices/
 │   │   └── Ordering/Ordering.API/       # orders
 │   ├── Web/storefront/                  # Angular 21 SPA
 │   └── Dockerfile                       # shared image for all .NET services
-├── tests/Services.Tests/                # integration tests
+├── tests/
+│   ├── Services.Tests/                  # API tests (in-memory, fast)
+│   └── Services.IntegrationTests/       # PostgreSQL + Redis via Testcontainers
 ├── docs/                                # architecture, API, front end, setup
 ├── docker-compose.yml
-├── global.json
+├── global.json                          # SDK pin + Microsoft.Testing.Platform opt-in
+├── dotnet-tools.json                    # local tools (dotnet-ef)
 └── aspnetcore-microservices.slnx        # new XML solution format
 ```
 
-Each service follows the same layout: `Program.cs` (composition root), `Endpoints/` (minimal API route groups), `Models/` (records and contracts) and `Data/` (repository interface and implementation).
+Each service follows the same layout: `Program.cs` (composition root), `Endpoints/` (minimal API route groups), `Models/` (records and contracts) and `Data/` (repository interface, in-memory and database implementations, `DbContext` and `Migrations/`).
 
 ## 🗺️ Roadmap
 
-- [ ] Real persistence: PostgreSQL + EF Core (Catalog, Ordering), Redis (Basket), provisioned by Aspire
+- [x] Real persistence: PostgreSQL + EF Core (Catalog, Ordering), Redis (Basket), provisioned by Aspire and Compose
 - [ ] Asynchronous messaging (RabbitMQ / MassTransit) with an outbox, e.g. `OrderSubmitted` events
 - [ ] Authentication with Keycloak / Entra ID (OIDC), replacing the demo user name
 - [ ] Rate limiting and output caching at the gateway
