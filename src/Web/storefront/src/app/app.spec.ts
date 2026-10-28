@@ -1,23 +1,29 @@
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { App } from './app';
 
 describe('App', () => {
-  beforeEach(async () => {
-    await TestBed.configureTestingModule({
+  beforeEach(() => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
       imports: [App],
-    }).compileComponents();
+      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+    });
   });
 
-  it('should create the app', () => {
+  it('renders the navigation and shows the basket item count', async () => {
     const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance;
-    expect(app).toBeTruthy();
-  });
+    fixture.detectChanges();
 
-  it('should render title', async () => {
-    const fixture = TestBed.createComponent(App);
+    TestBed.inject(HttpTestingController)
+      .expectOne('/api/basket/demo-user')
+      .flush({ userName: 'demo-user', items: [{ productId: 'p1', quantity: 3 }], total: 30 });
     await fixture.whenStable();
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, storefront');
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.brand')?.textContent).toContain('Storefront');
+    expect(el.querySelector('.cart__badge')?.textContent?.trim()).toBe('3');
   });
 });
