@@ -39,12 +39,12 @@ public sealed class MessagingTests(Infrastructure infra)
     {
         await using var catalog = CatalogApp();
         await using var basket = BasketApp();
-        var catalogClient = catalog.CreateClient();
-        var basketClient = basket.CreateClient();
+        var catalogClient = catalog.CreateClient().As("ada", "admin");
+        var user = $"user-{Guid.NewGuid():N}";
+        var basketClient = basket.CreateClient().As(user);
         await WaitForQueueAsync("basket-api.catalog.product-price-changed");
 
-        var user = $"user-{Guid.NewGuid():N}";
-        await basketClient.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(KeyboardId, 2), Ct);
+        await basketClient.PostAsJsonAsync("/api/basket/items", new AddItemRequest(KeyboardId, 2), Ct);
 
         // Catalog writes the new price and a ProductPriceChanged outbox row in one transaction;
         // the relay publishes it and Basket's consumer updates the cart in Redis.
@@ -52,7 +52,7 @@ public sealed class MessagingTests(Infrastructure infra)
         Assert.Equal(HttpStatusCode.NoContent, (await catalogClient.PutAsJsonAsync($"/api/products/{KeyboardId}", update, Ct)).StatusCode);
 
         var cart = await EventuallyAsync(
-            () => basketClient.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", Ct),
+            () => basketClient.GetFromJsonAsync<ShoppingCart>("/api/basket", Ct),
             c => c?.Items.Single().UnitPrice == 99.00m);
 
         Assert.Equal(198.00m, cart!.Total);
@@ -64,7 +64,7 @@ public sealed class MessagingTests(Infrastructure infra)
         await using var catalog = CatalogApp();
         var update = new UpsertProductRequest("Renamed Keyboard", "Same price.", "Peripherals", 129.99m, null);
 
-        await catalog.CreateClient().PutAsJsonAsync($"/api/products/{KeyboardId}", update, Ct);
+        await catalog.CreateClient().As("ada", "admin").PutAsJsonAsync($"/api/products/{KeyboardId}", update, Ct);
 
         await using var scope = catalog.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<CatalogDbContext>();
@@ -76,13 +76,13 @@ public sealed class MessagingTests(Infrastructure infra)
     {
         await using var ordering = OrderingApp();
         await using var basket = BasketApp();
-        var orderingClient = ordering.CreateClient();
-        var basketClient = basket.CreateClient();
+        var user = $"user-{Guid.NewGuid():N}";
+        var orderingClient = ordering.CreateClient().As(user);
+        var basketClient = basket.CreateClient().As(user);
         await WaitForQueueAsync("ordering-api.basket.checked-out");
 
-        var user = $"user-{Guid.NewGuid():N}";
-        await basketClient.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(KeyboardId, 3), Ct);
-        var checkout = await basketClient.PostAsJsonAsync($"/api/basket/{user}/checkout", new CheckoutRequest(BasketAddress), Ct);
+        await basketClient.PostAsJsonAsync("/api/basket/items", new AddItemRequest(KeyboardId, 3), Ct);
+        var checkout = await basketClient.PostAsJsonAsync("/api/basket/checkout", new CheckoutRequest(BasketAddress), Ct);
         var result = await checkout.Content.ReadFromJsonAsync<CheckoutResult>(Ct);
 
         // Basket answers immediately with the order id; Ordering creates the order from the message.
@@ -96,18 +96,18 @@ public sealed class MessagingTests(Infrastructure infra)
         Assert.Equal(user, order!.UserName);
         Assert.Equal(3 * 129.99m, order.Total);
         Assert.Equal(OrderAddress, order.ShippingAddress);
-        Assert.Empty((await basketClient.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", Ct))!.Items);
+        Assert.Empty((await basketClient.GetFromJsonAsync<ShoppingCart>("/api/basket", Ct))!.Items);
     }
 
     [Fact]
     public async Task A_redelivered_checkout_message_creates_exactly_one_order()
     {
         await using var ordering = OrderingApp();
-        var client = ordering.CreateClient();
-        await WaitForQueueAsync("ordering-api.basket.checked-out");
-
         var orderId = Guid.NewGuid();
         var user = $"user-{Guid.NewGuid():N}";
+        var client = ordering.CreateClient().As(user);
+        await WaitForQueueAsync("ordering-api.basket.checked-out");
+
         var message = new
         {
             id = Guid.NewGuid(),
@@ -122,10 +122,10 @@ public sealed class MessagingTests(Infrastructure infra)
         await PublishAsync("basket.checked-out", message);
         await PublishAsync("basket.checked-out", message);
 
-        await EventuallyAsync(() => client.GetFromJsonAsync<List<OrderingModels.Order>>($"/api/orders?userName={user}", Ct), o => o?.Count > 0);
+        await EventuallyAsync(() => client.GetFromJsonAsync<List<OrderingModels.Order>>("/api/orders", Ct), o => o?.Count > 0);
         await Task.Delay(TimeSpan.FromSeconds(2), Ct);   // give the duplicate time to be processed
 
-        var orders = await client.GetFromJsonAsync<List<OrderingModels.Order>>($"/api/orders?userName={user}", Ct);
+        var orders = await client.GetFromJsonAsync<List<OrderingModels.Order>>("/api/orders", Ct);
         Assert.Equal(orderId, Assert.Single(orders!).Id);
     }
 
@@ -134,19 +134,21 @@ public sealed class MessagingTests(Infrastructure infra)
     private WebApplicationFactory<CatalogApiMarker> CatalogApp() =>
         new WebApplicationFactory<CatalogApiMarker>().WithWebHostBuilder(b => b
             .UseSetting("ConnectionStrings:catalogdb", infra.PostgresConnectionString($"catalog_{Guid.NewGuid():N}"))
-            .UseSetting("ConnectionStrings:rabbitmq", infra.RabbitMqConnectionString));
+            .UseSetting("ConnectionStrings:rabbitmq", infra.RabbitMqConnectionString)
+            .ConfigureTestServices(s => s.AddTestAuthentication()));
 
     private WebApplicationFactory<OrderingApiMarker> OrderingApp() =>
         new WebApplicationFactory<OrderingApiMarker>().WithWebHostBuilder(b => b
             .UseSetting("ConnectionStrings:orderingdb", infra.PostgresConnectionString($"ordering_{Guid.NewGuid():N}"))
-            .UseSetting("ConnectionStrings:rabbitmq", infra.RabbitMqConnectionString));
+            .UseSetting("ConnectionStrings:rabbitmq", infra.RabbitMqConnectionString)
+            .ConfigureTestServices(s => s.AddTestAuthentication()));
 
     // Real Redis and RabbitMQ; only the Catalog HTTP lookup is faked (it returns the seeded keyboard).
     private WebApplicationFactory<BasketApiMarker> BasketApp() =>
         new WebApplicationFactory<BasketApiMarker>().WithWebHostBuilder(b => b
             .UseSetting("ConnectionStrings:redis", infra.RedisConnectionString)
             .UseSetting("ConnectionStrings:rabbitmq", infra.RabbitMqConnectionString)
-            .ConfigureTestServices(s => s.AddSingleton<ICatalogClient>(new SeededCatalog())));
+            .ConfigureTestServices(s => s.AddTestAuthentication().AddSingleton<ICatalogClient>(new SeededCatalog())));
 
     private sealed class SeededCatalog : ICatalogClient
     {

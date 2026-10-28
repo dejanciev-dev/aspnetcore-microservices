@@ -4,7 +4,7 @@ import { ApplicationRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { BasketStore } from './basket-store';
 import { ShoppingCart } from './models';
-import { UserSession } from './user-session';
+import { AuthService } from './auth';
 
 const cartWith = (quantity: number): ShoppingCart => ({
   userName: 'ada',
@@ -17,18 +17,17 @@ describe('BasketStore', () => {
   let http: HttpTestingController;
 
   beforeEach(() => {
-    localStorage.clear();
     TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
-    TestBed.inject(UserSession).rename('ada');
+    TestBed.inject(AuthService).user.set({ isAuthenticated: true, name: 'ada', displayName: 'Ada', roles: [] });
     store = TestBed.inject(BasketStore);
     http = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => http.verify());
 
-  it('loads the basket for the current user', async () => {
+  it('loads the basket once a user is signed in', async () => {
     TestBed.tick();
-    http.expectOne('/api/basket/ada').flush(cartWith(2));
+    http.expectOne('/api/basket').flush(cartWith(2));
     await TestBed.inject(ApplicationRef).whenStable();
 
     expect(store.itemCount()).toBe(2);
@@ -37,10 +36,10 @@ describe('BasketStore', () => {
 
   it('posts new items and replaces the cart with the server response', async () => {
     TestBed.tick();
-    http.expectOne('/api/basket/ada').flush(cartWith(0));
+    http.expectOne('/api/basket').flush(cartWith(0));
 
     const done = store.add('p1', 3);
-    const req = http.expectOne('/api/basket/ada/items');
+    const req = http.expectOne('/api/basket/items');
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual({ productId: 'p1', quantity: 3 });
     req.flush(cartWith(3));
@@ -51,11 +50,11 @@ describe('BasketStore', () => {
 
   it('empties the local cart after checkout', async () => {
     TestBed.tick();
-    http.expectOne('/api/basket/ada').flush(cartWith(1));
+    http.expectOne('/api/basket').flush(cartWith(1));
 
     const address = { fullName: 'Ada', street: '1 Main St', city: 'London', country: 'UK', zipCode: 'N1' };
     const done = store.checkout(address);
-    const req = http.expectOne('/api/basket/ada/checkout');
+    const req = http.expectOne('/api/basket/checkout');
     expect(req.request.body).toEqual({ shippingAddress: address });
     req.flush({ orderId: 'o1', total: 10 });
 

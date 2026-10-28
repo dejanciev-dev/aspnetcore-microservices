@@ -159,13 +159,13 @@ code {
   }
 }
 
-.user input {
-  width: 130px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text);
+.user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  &__name {
+    font-weight: 500;
+  }
 }
 
 .cart {
@@ -422,6 +422,31 @@ code {
     border-radius: 8px;
     aspect-ratio: 3 / 2;
     object-fit: cover;
+  }
+}
+
+.admin-price {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  input {
+    width: 120px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
   }
 }
 

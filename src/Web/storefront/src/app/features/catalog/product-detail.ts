@@ -1,9 +1,12 @@
 import { CurrencyPipe } from '@angular/common';
-import { httpResource } from '@angular/common/http';
+import { HttpClient, httpResource } from '@angular/common/http';
 import { Component, computed, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { firstValueFrom } from 'rxjs';
+import { AuthService } from '../../core/auth';
 import { Product } from '../../core/models';
 import { problemMessage } from '../../core/problem-details';
+import { ToastService } from '../../core/toast';
 import { AddToBasket } from '../../shared/add-to-basket';
 
 @Component({
@@ -34,6 +37,17 @@ import { AddToBasket } from '../../shared/add-to-basket';
               Add to basket · {{ p.price * quantity() | currency }}
             </button>
           </div>
+
+          @if (auth.isAdmin()) {
+            <!-- Catalog requires the admin role; a price change is published to RabbitMQ and reprices baskets. -->
+            <form class="admin-price" (submit)="$event.preventDefault(); savePrice(p, price.valueAsNumber)">
+              <label>
+                Price (admin)
+                <input #price type="number" min="0.01" step="0.01" [value]="p.price" aria-label="New price" />
+              </label>
+              <button class="btn" type="submit" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Update price' }}</button>
+            </form>
+          }
         </div>
       </article>
     } @else {
@@ -42,13 +56,33 @@ import { AddToBasket } from '../../shared/add-to-basket';
   `,
 })
 export class ProductDetail {
+  private readonly http = inject(HttpClient);
+  private readonly toasts = inject(ToastService);
   protected readonly adder = inject(AddToBasket);
+  protected readonly auth = inject(AuthService);
 
   readonly id = input.required<string>();
   protected readonly quantity = signal(1);
+  protected readonly saving = signal(false);
 
   protected readonly product = httpResource<Product>(() => `/api/products/${this.id()}`);
   protected readonly errorMessage = computed(() =>
     this.product.error() && (this.product.statusCode() === 404 ? 'Product not found.' : problemMessage(this.product.error())),
   );
+
+  protected async savePrice(product: Product, price: number): Promise<void> {
+    if (!(price > 0) || price === product.price) return;
+
+    this.saving.set(true);
+    try {
+      const { id, ...fields } = product;
+      await firstValueFrom(this.http.put(`/api/products/${id}`, { ...fields, price }));
+      this.product.reload();
+      this.toasts.success('Price updated. Baskets holding this product are repriced via RabbitMQ.');
+    } catch (error) {
+      this.toasts.error(problemMessage(error));
+    } finally {
+      this.saving.set(false);
+    }
+  }
 }

@@ -13,15 +13,22 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The same realm Aspire and docker-compose import. -->
+    <None Include="../../deploy/keycloak/storefront-realm.json" Link="keycloak/storefront-realm.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Services\Catalog\Catalog.API\Catalog.API.csproj" />
     <ProjectReference Include="..\..\src\Services\Basket\Basket.API\Basket.API.csproj" />
     <ProjectReference Include="..\..\src\Services\Ordering\Ordering.API\Ordering.API.csproj" />
+    <ProjectReference Include="..\..\src\ApiGateways\ApiGateway\ApiGateway.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.2" />
+    <PackageReference Include="Testcontainers.Keycloak" Version="4.16.0" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
     <PackageReference Include="Testcontainers.RabbitMq" Version="4.16.0" />
     <PackageReference Include="Testcontainers.Redis" Version="4.16.0" />

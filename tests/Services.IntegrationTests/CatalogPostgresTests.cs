@@ -5,6 +5,7 @@ using Catalog.API;
 using Catalog.API.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 
 namespace Services.IntegrationTests;
 
@@ -14,8 +15,9 @@ public sealed class CatalogPostgresTests(Infrastructure infra)
     private WebApplicationFactory<CatalogApiMarker> CreateApp(string? database = null)
     {
         var connectionString = infra.PostgresConnectionString(database ?? $"catalog_{Guid.NewGuid():N}");
-        return new WebApplicationFactory<CatalogApiMarker>().WithWebHostBuilder(b =>
-            b.UseSetting("ConnectionStrings:catalogdb", connectionString));
+        return new WebApplicationFactory<CatalogApiMarker>().WithWebHostBuilder(b => b
+            .UseSetting("ConnectionStrings:catalogdb", connectionString)
+            .ConfigureTestServices(s => s.AddTestAuthentication()));
     }
 
     [Fact]
@@ -66,7 +68,7 @@ public sealed class CatalogPostgresTests(Infrastructure infra)
 
         await using (var app = CreateApp(database))
         {
-            var client = app.CreateClient();
+            var client = app.CreateClient().As("ada", "admin");
             var created = await client.PostAsJsonAsync("/api/products", new UpsertProductRequest("Webcam", "1080p", "Peripherals", 79.99m, null), ct);
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
             location = created.Headers.Location!;
@@ -78,7 +80,7 @@ public sealed class CatalogPostgresTests(Infrastructure infra)
         // A brand-new app instance only sees what was actually written to PostgreSQL.
         await using (var app = CreateApp(database))
         {
-            var client = app.CreateClient();
+            var client = app.CreateClient().As("ada", "admin");
             var product = await client.GetFromJsonAsync<Product>(location, ct);
             Assert.Equal("Webcam Pro", product!.Name);
             Assert.Equal(129m, product.Price);

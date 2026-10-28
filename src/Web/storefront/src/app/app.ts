@@ -1,8 +1,8 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { AuthService } from './core/auth';
 import { BasketStore } from './core/basket-store';
 import { ToastService } from './core/toast';
-import { UserSession } from './core/user-session';
 
 @Component({
   selector: 'app-root',
@@ -19,22 +19,24 @@ import { UserSession } from './core/user-session';
           <a routerLink="/orders" routerLinkActive="active">Orders</a>
         </nav>
 
-        <label class="user" title="Basket and orders are stored per user name">
-          <span class="sr-only">User name</span>
-          <input
-            #user
-            [value]="session.userName()"
-            (change)="session.rename(user.value)"
-            aria-label="User name"
-          />
-        </label>
-
         <a routerLink="/basket" class="cart" aria-label="Basket">
           🛒
           @if (basket.itemCount() > 0) {
             <span class="cart__badge">{{ basket.itemCount() }}</span>
           }
         </a>
+
+        @if (auth.isAuthenticated()) {
+          <span class="user">
+            <span class="user__name">{{ auth.user().displayName }}</span>
+            @if (auth.isAdmin()) {
+              <span class="chip chip--muted">admin</span>
+            }
+          </span>
+          <button class="btn btn--ghost" (click)="auth.logout()">Sign out</button>
+        } @else {
+          <button class="btn btn--primary" (click)="auth.login()">Sign in</button>
+        }
       </div>
     </header>
 
@@ -43,7 +45,7 @@ import { UserSession } from './core/user-session';
     </main>
 
     <footer class="container footer">
-      .NET 10 microservices · YARP gateway · Angular 21
+      .NET 10 microservices · YARP BFF · Keycloak · Angular 21
     </footer>
 
     <div class="toasts" aria-live="polite">
@@ -57,6 +59,6 @@ import { UserSession } from './core/user-session';
 })
 export class App {
   protected readonly basket = inject(BasketStore);
-  protected readonly session = inject(UserSession);
+  protected readonly auth = inject(AuthService);
   protected readonly toasts = inject(ToastService);
 }

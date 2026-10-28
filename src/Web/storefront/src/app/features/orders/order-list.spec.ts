@@ -8,20 +8,19 @@ import { OrderList } from './order-list';
 
 describe('OrderList', () => {
   beforeEach(() => {
-    localStorage.clear();
     TestBed.configureTestingModule({
       imports: [OrderList],
       providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
     });
   });
 
-  it("lists the current user's orders", async () => {
+  it("lists the signed-in user's orders", async () => {
     const fixture = TestBed.createComponent(OrderList);
     fixture.detectChanges();
 
     const order: Order = {
       id: 'abcdef12-3456-7890-abcd-ef1234567890',
-      userName: 'demo-user',
+      userName: 'ada',
       items: [{ productId: 'p1', productName: 'Keyboard', unitPrice: 100, quantity: 2, lineTotal: 200 }],
       shippingAddress: { fullName: 'Ada', street: '1 Main', city: 'London', country: 'UK', zipCode: 'N1' },
       status: 'Submitted',
@@ -29,7 +28,7 @@ describe('OrderList', () => {
       total: 200,
     };
     TestBed.inject(HttpTestingController)
-      .expectOne((r) => r.url === '/api/orders' && r.params.get('userName') === 'demo-user')
+      .expectOne('/api/orders')
       .flush([order]);
     await TestBed.inject(ApplicationRef).whenStable();
 

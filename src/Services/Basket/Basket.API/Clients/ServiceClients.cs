@@ -28,17 +28,16 @@ public sealed class CatalogClient(HttpClient http) : ICatalogClient
     }
 }
 
-/// <summary>Typed HttpClient for Ordering.API.</summary>
+/// <summary>Typed HttpClient for Ordering.API; the user is taken from the relayed access token.</summary>
 public sealed class OrderingClient(HttpClient http) : IOrderingClient
 {
     private sealed record OrderLine(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity);
-    private sealed record CreateOrder(string UserName, IReadOnlyList<OrderLine> Items, ShippingAddress ShippingAddress);
+    private sealed record CreateOrder(IReadOnlyList<OrderLine> Items, ShippingAddress ShippingAddress);
     private sealed record CreatedOrder(Guid Id, decimal Total);
 
     public async Task<CheckoutResult> CreateOrderAsync(ShoppingCart cart, ShippingAddress address, CancellationToken ct = default)
     {
         var request = new CreateOrder(
-            cart.UserName,
             cart.Items.Select(i => new OrderLine(i.ProductId, i.ProductName, i.UnitPrice, i.Quantity)).ToList(),
             address);
 

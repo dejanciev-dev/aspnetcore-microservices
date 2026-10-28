@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using BuildingBlocks.Common;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Ordering.API.Data;
 using Ordering.API.Models;
@@ -8,22 +10,25 @@ public static class OrderEndpoints
 {
     public static IEndpointRouteBuilder MapOrderEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/orders").WithTags("Orders");
+        var group = app.MapGroup("/api/orders").WithTags("Orders").RequireAuthorization();
 
-        group.MapGet("/", async (string userName, IOrderRepository repo, CancellationToken ct) =>
-                TypedResults.Ok(await repo.ListByUserAsync(userName, ct)))
+        group.MapGet("/", async (ClaimsPrincipal user, IOrderRepository repo, CancellationToken ct) =>
+                TypedResults.Ok(await repo.ListByUserAsync(user.UserName(), ct)))
             .WithName("ListOrders")
-            .WithSummary("List a user's orders, newest first");
+            .WithSummary("List the signed-in user's orders, newest first");
 
-        group.MapGet("/{id:guid}", async Task<Results<Ok<Order>, NotFound>> (Guid id, IOrderRepository repo, CancellationToken ct) =>
-            await repo.GetAsync(id, ct) is { } order ? TypedResults.Ok(order) : TypedResults.NotFound())
+        // Someone else's order is reported as 404, not 403, so order ids can't be probed. Admins see all.
+        group.MapGet("/{id:guid}", async Task<Results<Ok<Order>, NotFound>> (Guid id, ClaimsPrincipal user, IOrderRepository repo, CancellationToken ct) =>
+                await repo.GetAsync(id, ct) is { } order && (IsOwner(order, user) || user.IsInRole("admin"))
+                    ? TypedResults.Ok(order)
+                    : TypedResults.NotFound())
             .WithName("GetOrder");
 
-        group.MapPost("/", async (CreateOrderRequest request, IOrderRepository repo, TimeProvider clock, ILogger<Order> logger, CancellationToken ct) =>
+        group.MapPost("/", async (CreateOrderRequest request, ClaimsPrincipal user, IOrderRepository repo, TimeProvider clock, ILogger<Order> logger, CancellationToken ct) =>
         {
             var order = new Order(
                 Guid.NewGuid(),
-                request.UserName,
+                user.UserName(),
                 request.Items,
                 request.ShippingAddress,
                 OrderStatus.Submitted,
@@ -37,4 +42,7 @@ public static class OrderEndpoints
 
         return app;
     }
+
+    private static bool IsOwner(Order order, ClaimsPrincipal user) =>
+        string.Equals(order.UserName, user.Identity?.Name, StringComparison.OrdinalIgnoreCase);
 }

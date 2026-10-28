@@ -34,8 +34,12 @@ if (builder.AddRabbitMqMessaging(queuePrefix: "basket-api"))
 }
 else
 {
+    // Relay the caller's access token so Ordering sees the same user.
+    builder.Services.AddHttpContextAccessor();
+    builder.Services.AddTransient<ForwardAccessTokenHandler>();
     builder.Services.AddHttpClient<IOrderingClient, OrderingClient>(http =>
-        http.BaseAddress = new Uri(builder.Configuration["Services:Ordering"]!));
+            http.BaseAddress = new Uri(builder.Configuration["Services:Ordering"]!))
+        .AddHttpMessageHandler<ForwardAccessTokenHandler>();
 }
 
 var app = builder.Build();

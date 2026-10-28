@@ -1,16 +1,15 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
 import { httpResource } from '@angular/common/http';
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Order } from '../../core/models';
 import { problemMessage } from '../../core/problem-details';
-import { UserSession } from '../../core/user-session';
 
 @Component({
   selector: 'app-order-list',
   imports: [CurrencyPipe, DatePipe, RouterLink],
   template: `
-    <h1>Orders for {{ session.userName() }}</h1>
+    <h1>Your orders</h1>
 
     @if (orders.error()) {
       <div class="alert" role="alert">{{ errorMessage() }}</div>
@@ -46,12 +45,8 @@ import { UserSession } from '../../core/user-session';
   `,
 })
 export class OrderList {
-  protected readonly session = inject(UserSession);
-
-  protected readonly orders = httpResource<Order[]>(() => ({
-    url: '/api/orders',
-    params: { userName: this.session.userName() },
-  }));
+  // The API returns the signed-in user's orders; the user comes from the session.
+  protected readonly orders = httpResource<Order[]>(() => '/api/orders');
 
   protected readonly errorMessage = computed(() => problemMessage(this.orders.error()));
 }

@@ -11,13 +11,14 @@ namespace BuildingBlocks.Common;
 
 /// <summary>
 /// Cross-cutting setup shared by every microservice: OpenAPI, ProblemDetails,
-/// health checks, resilient outgoing HTTP calls and OpenTelemetry.
+/// health checks, resilient outgoing HTTP calls, OpenTelemetry and JWT authentication.
 /// </summary>
 public static class ServiceDefaults
 {
     public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
     {
         builder.ConfigureOpenTelemetry();
+        builder.AddApiAuthentication();
 
         builder.Services.AddOpenApi();
         builder.Services.AddProblemDetails();
@@ -62,6 +63,8 @@ public static class ServiceDefaults
     {
         app.UseExceptionHandler();
         app.UseStatusCodePages();
+        app.UseAuthentication();
+        app.UseAuthorization();
 
         app.MapOpenApi();
         app.MapScalarApiReference();

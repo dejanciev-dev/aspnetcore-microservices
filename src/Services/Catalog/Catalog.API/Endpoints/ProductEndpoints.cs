@@ -32,15 +32,18 @@ public static class ProductEndpoints
             var product = await repo.AddAsync(request.ToProduct(Guid.NewGuid()), ct);
             return TypedResults.CreatedAtRoute(product, "GetProduct", new { id = product.Id });
         })
-        .WithName("CreateProduct");
+        .WithName("CreateProduct")
+        .RequireAuthorization(Authentication.AdminPolicy);
 
         group.MapPut("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, UpsertProductRequest request, IProductRepository repo, CancellationToken ct) =>
             await repo.UpdateAsync(request.ToProduct(id), ct) ? TypedResults.NoContent() : TypedResults.NotFound())
-            .WithName("UpdateProduct");
+            .WithName("UpdateProduct")
+            .RequireAuthorization(Authentication.AdminPolicy);
 
         group.MapDelete("/{id:guid}", async Task<Results<NoContent, NotFound>> (Guid id, IProductRepository repo, CancellationToken ct) =>
             await repo.DeleteAsync(id, ct) ? TypedResults.NoContent() : TypedResults.NotFound())
-            .WithName("DeleteProduct");
+            .WithName("DeleteProduct")
+            .RequireAuthorization(Authentication.AdminPolicy);
 
         return app;
     }

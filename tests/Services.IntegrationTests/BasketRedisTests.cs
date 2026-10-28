@@ -23,6 +23,7 @@ public sealed class BasketRedisTests(Infrastructure infra)
             b.UseSetting("ConnectionStrings:redis", infra.RedisConnectionString);
             b.ConfigureTestServices(services =>
             {
+                services.AddTestAuthentication();
                 services.AddSingleton<ICatalogClient>(new FakeCatalog());
                 services.AddSingleton<IOrderingClient>(new FakeOrdering());
             });
@@ -36,7 +37,7 @@ public sealed class BasketRedisTests(Infrastructure infra)
 
         await using (var app = CreateApp())
         {
-            var response = await app.CreateClient().PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id, 2), ct);
+            var response = await app.CreateClient().As(user).PostAsJsonAsync("/api/basket/items", new AddItemRequest(Keyboard.Id, 2), ct);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             var redis = app.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase();
@@ -47,7 +48,7 @@ public sealed class BasketRedisTests(Infrastructure infra)
         await using (var app = CreateApp())
         {
             // Lookup is case-insensitive, like the in-memory store.
-            var cart = await app.CreateClient().GetFromJsonAsync<ShoppingCart>($"/api/basket/{user.ToUpperInvariant()}", ct);
+            var cart = await app.CreateClient().As(user.ToUpperInvariant()).GetFromJsonAsync<ShoppingCart>("/api/basket", ct);
 
             var item = Assert.Single(cart!.Items);
             Assert.Equal(2, item.Quantity);
@@ -61,10 +62,10 @@ public sealed class BasketRedisTests(Infrastructure infra)
         var user = $"user-{Guid.NewGuid():N}";
         var ct = TestContext.Current.CancellationToken;
         await using var app = CreateApp();
-        var client = app.CreateClient();
+        var client = app.CreateClient().As(user);
 
-        await client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id), ct);
-        var checkout = await client.PostAsJsonAsync($"/api/basket/{user}/checkout", new CheckoutRequest(Address), ct);
+        await client.PostAsJsonAsync("/api/basket/items", new AddItemRequest(Keyboard.Id), ct);
+        var checkout = await client.PostAsJsonAsync("/api/basket/checkout", new CheckoutRequest(Address), ct);
 
         Assert.Equal(HttpStatusCode.OK, checkout.StatusCode);
         var redis = app.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase();

@@ -3,19 +3,20 @@ using System.Net.Http.Json;
 using BuildingBlocks.Common;
 using Catalog.API;
 using Catalog.API.Models;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 
 namespace Services.Tests;
 
-public sealed class CatalogApiTests(WebApplicationFactory<CatalogApiMarker> factory)
-    : IClassFixture<WebApplicationFactory<CatalogApiMarker>>
+public sealed class CatalogApiTests(CatalogApiTests.Factory factory) : IClassFixture<CatalogApiTests.Factory>
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task List_returns_seeded_products()
+    public async Task Browsing_is_public()
     {
-        var page = await _client.GetFromJsonAsync<PagedResult<Product>>("/api/products?pageSize=100", TestContext.Current.CancellationToken);
+        var page = await factory.CreateClient().GetFromJsonAsync<PagedResult<Product>>("/api/products?pageSize=100", Ct);
 
         Assert.NotNull(page);
         Assert.True(page.TotalCount >= 8);
@@ -24,7 +25,7 @@ public sealed class CatalogApiTests(WebApplicationFactory<CatalogApiMarker> fact
     [Fact]
     public async Task List_filters_by_category()
     {
-        var page = await _client.GetFromJsonAsync<PagedResult<Product>>("/api/products?category=Audio", TestContext.Current.CancellationToken);
+        var page = await factory.CreateClient().GetFromJsonAsync<PagedResult<Product>>("/api/products?category=Audio", Ct);
 
         Assert.NotNull(page);
         Assert.NotEmpty(page.Items);
@@ -34,21 +35,35 @@ public sealed class CatalogApiTests(WebApplicationFactory<CatalogApiMarker> fact
     [Fact]
     public async Task Get_unknown_product_returns_404()
     {
-        var response = await _client.GetAsync($"/api/products/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var response = await factory.CreateClient().GetAsync($"/api/products/{Guid.NewGuid()}", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
-    public async Task Create_then_get_round_trips()
+    public async Task Admin_can_create_then_get()
     {
+        var admin = factory.CreateClient().As("ada", "admin");
         var request = new UpsertProductRequest("Webcam", "1080p webcam", "Peripherals", 79.99m, null);
 
-        var created = await _client.PostAsJsonAsync("/api/products", request, TestContext.Current.CancellationToken);
+        var created = await admin.PostAsJsonAsync("/api/products", request, Ct);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
-        var product = await _client.GetFromJsonAsync<Product>(created.Headers.Location, TestContext.Current.CancellationToken);
+        var product = await admin.GetFromJsonAsync<Product>(created.Headers.Location, Ct);
         Assert.Equal("Webcam", product?.Name);
+    }
+
+    [Theory]
+    [InlineData(null, HttpStatusCode.Unauthorized)]
+    [InlineData("customer", HttpStatusCode.Forbidden)]
+    public async Task Managing_products_requires_the_admin_role(string? role, HttpStatusCode expected)
+    {
+        var client = factory.CreateClient();
+        if (role is not null) client.As("grace", role);
+
+        var response = await client.PostAsJsonAsync("/api/products", new UpsertProductRequest("Webcam", "", "Peripherals", 79.99m, null), Ct);
+
+        Assert.Equal(expected, response.StatusCode);
     }
 
     [Fact]
@@ -56,8 +71,14 @@ public sealed class CatalogApiTests(WebApplicationFactory<CatalogApiMarker> fact
     {
         var request = new UpsertProductRequest("Freebie", "", "Peripherals", 0m, null);
 
-        var response = await _client.PostAsJsonAsync("/api/products", request, TestContext.Current.CancellationToken);
+        var response = await factory.CreateClient().As("ada", "admin").PostAsJsonAsync("/api/products", request, Ct);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    public sealed class Factory : WebApplicationFactory<CatalogApiMarker>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+            builder.ConfigureTestServices(services => services.AddTestAuthentication());
     }
 }

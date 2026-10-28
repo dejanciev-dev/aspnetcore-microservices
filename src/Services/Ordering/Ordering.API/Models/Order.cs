@@ -35,7 +35,7 @@ public sealed record Order(
     public decimal Total => Items.Sum(i => i.LineTotal);
 }
 
+/// <summary>The order is created for the authenticated user.</summary>
 public sealed record CreateOrderRequest(
-    [property: Required, StringLength(64)] string UserName,
     [property: Required, MinLength(1)] IReadOnlyList<OrderItem> Items,
     [property: Required] ShippingAddress ShippingAddress);

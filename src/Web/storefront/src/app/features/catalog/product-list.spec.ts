@@ -19,7 +19,6 @@ describe('ProductList', () => {
   let http: HttpTestingController;
 
   beforeEach(() => {
-    localStorage.clear();
     TestBed.configureTestingModule({
       imports: [ProductList],
       providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
@@ -33,7 +32,6 @@ describe('ProductList', () => {
     fixture.componentRef.setInput('page', '2');
     fixture.detectChanges();
 
-    http.expectOne('/api/basket/demo-user').flush({ userName: 'demo-user', items: [], total: 0 });
     http.expectOne('/api/products/categories').flush(['Audio', 'Displays']);
     const req = http.expectOne((r) => r.url === '/api/products');
     expect(req.request.params.get('category')).toBe('Audio');
@@ -54,7 +52,6 @@ describe('ProductList', () => {
     const fixture = TestBed.createComponent(ProductList);
     fixture.detectChanges();
 
-    http.expectOne('/api/basket/demo-user').flush({ userName: 'demo-user', items: [], total: 0 });
     http.expectOne('/api/products/categories').flush([]);
     http.expectOne((r) => r.url === '/api/products').error(new ProgressEvent('error'), { status: 0 });
     await TestBed.inject(ApplicationRef).whenStable();

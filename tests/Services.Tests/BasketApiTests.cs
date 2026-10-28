@@ -10,26 +10,31 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Services.Tests;
 
-public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
+public sealed class BasketApiTests(BasketApiTests.Factory factory) : IClassFixture<BasketApiTests.Factory>
 {
     private static readonly CatalogProduct Keyboard = new(Guid.NewGuid(), "Keyboard", "", 129.99m);
+    private static readonly ShippingAddress Address = new("Ada Lovelace", "1 Main St", "London", "UK", "N1 9GU");
 
-    private readonly HttpClient _client;
-    private readonly FakeOrderingClient _ordering;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public BasketApiTests(Factory factory)
+    private HttpClient ClientFor(string user) => factory.CreateClient().As(user, "customer");
+    private static string NewUser() => $"user-{Guid.NewGuid():N}";
+
+    [Fact]
+    public async Task The_basket_requires_a_signed_in_user()
     {
-        _client = factory.CreateClient();
-        _ordering = factory.Ordering;
+        var response = await factory.CreateClient().GetAsync("/api/basket", Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Adding_an_item_uses_the_catalog_price()
     {
-        var user = NewUser();
+        var client = ClientFor(NewUser());
 
-        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id, 2), TestContext.Current.CancellationToken);
-        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", TestContext.Current.CancellationToken);
+        await client.PostAsJsonAsync("/api/basket/items", new AddItemRequest(Keyboard.Id, 2), Ct);
+        var cart = await client.GetFromJsonAsync<ShoppingCart>("/api/basket", Ct);
 
         var item = Assert.Single(cart!.Items);
         Assert.Equal(Keyboard.Price, item.UnitPrice);
@@ -37,40 +42,46 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
     }
 
     [Fact]
+    public async Task Each_user_only_sees_their_own_basket()
+    {
+        var ada = ClientFor(NewUser());
+        var grace = ClientFor(NewUser());
+
+        await ada.PostAsJsonAsync("/api/basket/items", new AddItemRequest(Keyboard.Id), Ct);
+        var graceCart = await grace.GetFromJsonAsync<ShoppingCart>("/api/basket", Ct);
+
+        Assert.Empty(graceCart!.Items);
+    }
+
+    [Fact]
     public async Task Adding_an_unknown_product_returns_400()
     {
-        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/items", new AddItemRequest(Guid.NewGuid()), TestContext.Current.CancellationToken);
+        var response = await ClientFor(NewUser()).PostAsJsonAsync("/api/basket/items", new AddItemRequest(Guid.NewGuid()), Ct);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task Checkout_creates_an_order_and_clears_the_basket()
+    public async Task Checkout_creates_an_order_for_the_signed_in_user_and_clears_the_basket()
     {
         var user = NewUser();
-        await _client.PostAsJsonAsync($"/api/basket/{user}/items", new AddItemRequest(Keyboard.Id), TestContext.Current.CancellationToken);
+        var client = ClientFor(user);
+        await client.PostAsJsonAsync("/api/basket/items", new AddItemRequest(Keyboard.Id), Ct);
 
-        var address = new ShippingAddress("Ada Lovelace", "1 Main St", "London", "UK", "N1 9GU");
-        var response = await _client.PostAsJsonAsync($"/api/basket/{user}/checkout", new CheckoutRequest(address), TestContext.Current.CancellationToken);
+        var response = await client.PostAsJsonAsync("/api/basket/checkout", new CheckoutRequest(Address), Ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains(_ordering.Submitted, c => c.UserName == user);
-
-        var cart = await _client.GetFromJsonAsync<ShoppingCart>($"/api/basket/{user}", TestContext.Current.CancellationToken);
-        Assert.Empty(cart!.Items);
+        Assert.Contains(factory.Ordering.Submitted, c => c.UserName == user);
+        Assert.Empty((await client.GetFromJsonAsync<ShoppingCart>("/api/basket", Ct))!.Items);
     }
 
     [Fact]
     public async Task Checkout_of_empty_basket_returns_400()
     {
-        var address = new ShippingAddress("Ada Lovelace", "1 Main St", "London", "UK", "N1 9GU");
-
-        var response = await _client.PostAsJsonAsync($"/api/basket/{NewUser()}/checkout", new CheckoutRequest(address), TestContext.Current.CancellationToken);
+        var response = await ClientFor(NewUser()).PostAsJsonAsync("/api/basket/checkout", new CheckoutRequest(Address), Ct);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
-
-    private static string NewUser() => $"user-{Guid.NewGuid():N}";
 
     public sealed class Factory : WebApplicationFactory<BasketApiMarker>
     {
@@ -79,6 +90,7 @@ public sealed class BasketApiTests : IClassFixture<BasketApiTests.Factory>
         protected override void ConfigureWebHost(IWebHostBuilder builder) =>
             builder.ConfigureTestServices(services =>
             {
+                services.AddTestAuthentication();
                 services.AddSingleton<ICatalogClient>(new FakeCatalogClient(Keyboard));
                 services.AddSingleton<IOrderingClient>(Ordering);
             });

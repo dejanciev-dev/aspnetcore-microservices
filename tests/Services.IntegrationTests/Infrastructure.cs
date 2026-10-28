@@ -1,3 +1,4 @@
+using Testcontainers.Keycloak;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
@@ -7,7 +8,7 @@ using Testcontainers.Redis;
 namespace Services.IntegrationTests;
 
 /// <summary>
-/// One PostgreSQL, one Redis and one RabbitMQ container shared by the whole test run.
+/// One PostgreSQL, Redis, RabbitMQ and Keycloak container each, shared by the whole test run.
 /// Without Docker the tests are skipped locally, but they fail on CI so a broken
 /// runner never passes silently.
 /// </summary>
@@ -16,6 +17,7 @@ public sealed class Infrastructure : IAsyncLifetime
     private PostgreSqlContainer? _postgres;
     private RedisContainer? _redis;
     private RabbitMqContainer? _rabbitMq;
+    private KeycloakContainer? _keycloak;
 
     public string? UnavailableReason { get; private set; }
 
@@ -27,7 +29,11 @@ public sealed class Infrastructure : IAsyncLifetime
             _postgres = new PostgreSqlBuilder("postgres:18-alpine").Build();
             _redis = new RedisBuilder("redis:8-alpine").Build();
             _rabbitMq = new RabbitMqBuilder("rabbitmq:4-management-alpine").Build();
-            await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbitMq.StartAsync());
+            _keycloak = new KeycloakBuilder("quay.io/keycloak/keycloak:26.8")
+                .WithResourceMapping(new FileInfo(Path.Combine(AppContext.BaseDirectory, "keycloak", "storefront-realm.json")), "/opt/keycloak/data/import/")
+                .WithCommand("--import-realm")
+                .Build();
+            await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbitMq.StartAsync(), _keycloak.StartAsync());
         }
         catch (Exception ex) when (Environment.GetEnvironmentVariable("CI") is null)
         {
@@ -60,10 +66,21 @@ public sealed class Infrastructure : IAsyncLifetime
         }
     }
 
+    /// <summary>The storefront realm, e.g. http://127.0.0.1:32768/realms/storefront.</summary>
+    public string KeycloakRealmUrl
+    {
+        get
+        {
+            Assert.SkipWhen(UnavailableReason is not null, UnavailableReason ?? "");
+            return new Uri(new Uri(_keycloak!.GetBaseAddress()), "realms/storefront").ToString();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_postgres is not null) await _postgres.DisposeAsync();
         if (_redis is not null) await _redis.DisposeAsync();
         if (_rabbitMq is not null) await _rabbitMq.DisposeAsync();
+        if (_keycloak is not null) await _keycloak.DisposeAsync();
     }
 }

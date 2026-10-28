@@ -1,5 +1,6 @@
 # Full stack in containers:  docker compose up --build
-#   Storefront        http://localhost:4200
+#   Storefront        http://localhost:4200    (sign in as ada/ada = admin, grace/grace = customer)
+#   Keycloak          http://localhost:8080    (admin console: admin / ${KEYCLOAK_ADMIN_PASSWORD:-admin})
 #   API gateway       http://localhost:5100
 #   Aspire dashboard  http://localhost:18888   (logs, metrics, distributed traces)
 #   PostgreSQL        localhost:5432            (postgres / ${POSTGRES_PASSWORD:-postgres})
@@ -8,10 +9,14 @@
 
 x-service-defaults: &service-defaults
   restart: unless-stopped
-  environment: &otel-env
+  environment: &common-env
     ASPNETCORE_ENVIRONMENT: Development   # keeps the OpenAPI/Scalar docs enabled for the demo
     OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire-dashboard:18889
     OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    # Tokens are issued for http://localhost:8080 (what the browser sees); containers fetch
+    # discovery and signing keys from keycloak:8080 on the internal network.
+    Identity__Authority: http://localhost:8080/realms/storefront
+    Identity__MetadataAddress: http://keycloak:8080/realms/storefront/.well-known/openid-configuration
 
 services:
   catalog-api:
@@ -22,13 +27,14 @@ services:
       args:
         PROJECT: Services/Catalog/Catalog.API/Catalog.API.csproj
     environment:
-      <<: *otel-env
+      <<: *common-env
       OTEL_SERVICE_NAME: catalog-api
       ConnectionStrings__catalogdb: Host=postgres;Database=catalogdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
       ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
 
   ordering-api:
     <<: *service-defaults
@@ -38,13 +44,14 @@ services:
       args:
         PROJECT: Services/Ordering/Ordering.API/Ordering.API.csproj
     environment:
-      <<: *otel-env
+      <<: *common-env
       OTEL_SERVICE_NAME: ordering-api
       ConnectionStrings__orderingdb: Host=postgres;Database=orderingdb;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
       ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
 
   basket-api:
     <<: *service-defaults
@@ -54,7 +61,7 @@ services:
       args:
         PROJECT: Services/Basket/Basket.API/Basket.API.csproj
     environment:
-      <<: *otel-env
+      <<: *common-env
       OTEL_SERVICE_NAME: basket-api
       ConnectionStrings__redis: redis:6379
       ConnectionStrings__rabbitmq: amqp://storefront:${RABBITMQ_PASSWORD:-storefront}@rabbitmq:5672
@@ -63,6 +70,7 @@ services:
     depends_on:
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
       catalog-api: { condition: service_started }
       ordering-api: { condition: service_started }
 
@@ -74,14 +82,19 @@ services:
       args:
         PROJECT: ApiGateways/ApiGateway/ApiGateway.csproj
     environment:
-      <<: *otel-env
+      <<: *common-env
       OTEL_SERVICE_NAME: api-gateway
+      Identity__ClientSecret: ${KEYCLOAK_CLIENT_SECRET:-storefront-bff-dev-secret}
       ReverseProxy__Clusters__catalog__Destinations__d1__Address: http://catalog-api:8080
       ReverseProxy__Clusters__basket__Destinations__d1__Address: http://basket-api:8080
       ReverseProxy__Clusters__ordering__Destinations__d1__Address: http://ordering-api:8080
     ports:
       - "5100:8080"
-    depends_on: [catalog-api, basket-api, ordering-api]
+    depends_on:
+      keycloak: { condition: service_healthy }
+      catalog-api: { condition: service_started }
+      basket-api: { condition: service_started }
+      ordering-api: { condition: service_started }
 
   storefront:
     build: src/Web/storefront
@@ -136,6 +149,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8
+    command: ["start-dev", "--import-realm"]   # dev mode: HTTP, embedded H2 database
+    restart: unless-stopped
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HOSTNAME: http://localhost:8080             # issuer and browser-facing URLs
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"        # back-channel URLs follow the request (keycloak:8080)
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; speak HTTP to the management port over bash's /dev/tcp.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e \"GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:13.6
