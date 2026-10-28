@@ -45,7 +45,7 @@ dotnet run --project src/Aspire/AppHost
 
 The AppHost ([`src/Aspire/AppHost/AppHost.cs`](../src/Aspire/AppHost/AppHost.cs)):
 
-1. starts a **PostgreSQL** container with two databases (`catalogdb`, `orderingdb`), a **Redis** container and a **RabbitMQ** container (with its management UI linked from the dashboard), all with persistent data volumes (requires Docker or Podman);
+1. starts **Keycloak** on port 8080 and imports the realm from `deploy/keycloak`, then a **PostgreSQL** container with two databases (`catalogdb`, `orderingdb`), a **Redis** container and a **RabbitMQ** container (with its management UI linked from the dashboard), all with persistent data volumes (requires Docker or Podman);
 2. starts `catalog-api` and `ordering-api` once their database is ready, injecting `ConnectionStrings__catalogdb` / `__orderingdb`; they apply migrations on startup;
 3. starts `basket-api` once Redis, Catalog and Ordering are healthy;
 4. starts `api-gateway` once the services are healthy, and injects the real service URLs into the YARP cluster configuration;
@@ -68,7 +68,13 @@ dotnet run --project src/ApiGateways/ApiGateway
 npm start --prefix src/Web/storefront
 ```
 
-Every project uses the `http` launch profile with a fixed port (see [Ports](#ports)), so the defaults in `appsettings.json` line up with no extra configuration. With no connection strings set, **each service uses its in-memory store and checkout calls Ordering over HTTP**, so no Docker is needed. Telemetry is not exported in this mode unless you set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+Start Keycloak first; it's the one container this mode can't do without, because signing in needs it:
+
+```bash
+docker compose up -d keycloak
+```
+
+Every project uses the `http` launch profile with a fixed port (see [Ports](#ports)), so the defaults in `appsettings.json` (including `Identity:Authority=http://localhost:8080/realms/storefront`) line up with no extra configuration. With no connection strings set, **each service uses its in-memory store and checkout calls Ordering over HTTP**, so no Docker is needed. Telemetry is not exported in this mode unless you set `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 To use real databases in this mode, start only the infrastructure from Compose and point the services at it:
 
@@ -105,6 +111,7 @@ Stop everything with `docker compose down`. Data is kept in the `postgres-data`,
 | Catalog.API | 5101 | internal only |
 | Basket.API | 5102 | internal only |
 | Ordering.API | 5103 | internal only |
+| Keycloak | 8080 | 8080 |
 | Aspire dashboard | 15100 (AppHost) | 18888 |
 | PostgreSQL | dynamic (AppHost) | 5432 |
 | Redis | dynamic (AppHost) | 6379 |
@@ -118,6 +125,9 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 
 | Setting | Used by | Default | Purpose |
 |---|---|---|---|
+| `Identity:Authority` | all services, gateway | `http://localhost:8080/realms/storefront` | Keycloak realm; the token issuer |
+| `Identity:MetadataAddress` | all services, gateway | *(derived from Authority)* | Where to fetch discovery and keys when the internal host differs (Compose) |
+| `Identity:ClientId` / `Identity:ClientSecret` | gateway | `storefront-bff` / dev secret | The BFF's confidential client; override the secret outside development |
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
 | `ConnectionStrings:redis` | Basket.API | *(unset → in-memory)* | StackExchange.Redis configuration string, e.g. `localhost:6379` |
@@ -133,6 +143,22 @@ Example: point Basket at a Catalog running elsewhere:
 
 ```bash
 Services__Catalog=http://catalog.internal:8080 dotnet run --project src/Services/Basket/Basket.API
+```
+
+## Signing in
+
+| User | Password | Roles |
+|---|---|---|
+| `ada` | `ada` | `admin`, `customer` |
+| `grace` | `grace` | `customer` |
+
+The Keycloak admin console is at http://localhost:8080 (`admin` / `admin` in Compose; Aspire shows its generated password in the dashboard). Changes made there are kept in the Keycloak volume. To go back to the realm file, delete the volume (`docker compose down -v`), because the realm is only imported when it doesn't exist yet.
+
+For API clients and scripts, get a token from the test client and call the gateway or a service directly:
+
+```bash
+curl -s http://localhost:8080/realms/storefront/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=storefront-tests -d username=ada -d password=ada | jq -r .access_token
 ```
 
 ## Databases and migrations
@@ -167,7 +193,7 @@ To watch messaging in action: change a product's price (`PUT /api/products/{id}`
 The test projects use **xUnit v3** on **Microsoft.Testing.Platform** (opted in via `global.json`).
 
 ```bash
-# everything: 11 API tests + 13 PostgreSQL/Redis/RabbitMQ tests
+# everything: 20 API tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
 dotnet test
 
 # with TRX reports and Cobertura coverage
@@ -178,7 +204,7 @@ cd src/Web/storefront
 npx ng test --watch=false
 ```
 
-`tests/Services.IntegrationTests` starts PostgreSQL, Redis and RabbitMQ with **Testcontainers**, so it needs Docker. Without Docker the 13 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
+`tests/Services.IntegrationTests` starts PostgreSQL, Redis, RabbitMQ and Keycloak with **Testcontainers**, so it needs Docker. Without Docker the 18 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
 
 See the "Testing" sections in [architecture.md](architecture.md#testing-strategy) and [frontend.md](frontend.md#testing) for what each suite covers.
 
@@ -218,6 +244,25 @@ Basket validates every product against Catalog. Use one of the seeded IDs (`4f1c
 <summary><b>Catalog/Ordering exits on startup with <code>NpgsqlException: Failed to connect</code></b></summary>
 
 A connection string is set but PostgreSQL isn't reachable. Start it (`docker compose up -d postgres`), check host, port and password, or unset `ConnectionStrings__catalogdb` / `__orderingdb` to fall back to in-memory.
+</details>
+
+<details>
+<summary><b>Keycloak says "Invalid parameter: redirect_uri"</b></summary>
+
+The gateway builds the callback URL from the host the browser used. Only `http://localhost:4200/signin-oidc` and `http://localhost:5100/signin-oidc` are registered on the `storefront-bff` client. Open the storefront on one of those (not `127.0.0.1`), or add your URL to the client in Keycloak.
+</details>
+
+<details>
+<summary><b>Signing in ends with "Correlation failed" or loops back to the login page</b></summary>
+
+The browser didn't send back the OIDC correlation cookie. Make sure the dev proxy or nginx forwards `/signin-oidc` to the gateway **with the original Host header** (`changeOrigin: false`, `proxy_set_header Host $http_host`), and clear cookies for `localhost`.
+</details>
+
+<details>
+<summary><b>APIs return 401 although I'm signed in</b></summary>
+
+- **Through the gateway:** the session may have expired (sign in again), or the issuer doesn't match. Tokens are issued for the URL the *browser* uses for Keycloak, so `Identity:Authority` must be exactly that (`http://localhost:8080/realms/storefront`).
+- **Calling a service directly:** send `Authorization: Bearer <token>`; the token's audience must include `storefront-api`.
 </details>
 
 <details>

@@ -7,6 +7,7 @@ This document explains how the system is put together and why. For setup instruc
 - [Communication](#communication)
 - [Persistence](#persistence)
 - [Messaging](#messaging)
+- [Security](#security)
 - [Request flows](#request-flows)
 - [Cross-cutting concerns](#cross-cutting-concerns)
 - [Design decisions](#design-decisions)
@@ -21,7 +22,8 @@ This document explains how the system is put together and why. For setup instruc
 flowchart TB
     browser([Browser])
     spa[Angular storefront]
-    gw[YARP API gateway]
+    gw[YARP API gateway + BFF]
+    kc[Keycloak]
     catalog[Catalog.API]
     basket[Basket.API]
     ordering[Ordering.API]
@@ -33,6 +35,8 @@ flowchart TB
     mq{{RabbitMQ}}
 
     browser --> spa --> gw
+    gw -. OIDC .-> kc
+    catalog & basket & ordering -. JWKS .-> kc
     gw --> catalog & basket & ordering
     basket -- HTTP --> catalog
     catalog -. events .-> mq
@@ -44,7 +48,7 @@ flowchart TB
     catalog & basket & ordering & gw -. OTLP .-> dash
 ```
 
-The browser only ever talks to **one origin**. In development the Angular dev server proxies `/api` to the gateway; in containers nginx does the same. No service needs CORS, and the internal topology can change without touching the front end.
+The browser only ever talks to **one origin**. In development the Angular dev server proxies `/api`, `/bff` and the OIDC callback paths to the gateway; in containers nginx does the same. That keeps the session cookie first-party. No service needs CORS, and the internal topology can change without touching the front end.
 
 ## Services
 
@@ -76,7 +80,7 @@ The source of truth for products and prices.
 A per-user shopping cart and the **orchestrator of checkout**.
 
 - **Redis**: each cart is one JSON document under `basket:{user}` with a **sliding 30-day expiry** that every write renews, so abandoned carts clean themselves up
-- The cart is keyed by user name; `ShoppingCart` and `CartItem` are immutable records updated with `with` expressions
+- The cart belongs to the signed-in user (keyed by their user name from the token); `ShoppingCart` and `CartItem` are immutable records updated with `with` expressions
 - **Adding an item resolves the product from Catalog**, so a client can never set its own price
 - **Checkout** sends the cart to Ordering, and clears the basket only after Ordering confirms
 - Talks to other services through typed clients (`ICatalogClient`, `IOrderingClient`). That keeps HTTP details out of the endpoints and makes them easy to fake in tests
@@ -93,7 +97,7 @@ Owns orders and their lifecycle.
 
 ### ApiGateway
 
-A [YARP](https://microsoft.github.io/reverse-proxy/) reverse proxy configured entirely from `appsettings.json`:
+A [YARP](https://microsoft.github.io/reverse-proxy/) reverse proxy that is also the **backend-for-frontend (BFF)**: it signs users in with Keycloak and attaches their access token to proxied calls (see [Security](#security)). Routes come entirely from `appsettings.json`:
 
 | Route | Cluster | Default destination |
 |---|---|---|
@@ -276,6 +280,97 @@ Basket has no relational database, so instead of an outbox it relies on **publis
 
 Ordering consumes the event and inserts the order **only if that ID doesn't exist yet**: an existence check plus a unique-key violation guard for concurrent deliveries. The storefront navigates to `/orders/{id}?placed=true` and shows a "processing" state, polling until the order appears (usually well under a second).
 
+## Security
+
+Authentication uses **Keycloak** (OpenID Connect) with the **backend-for-frontend** pattern. This is the approach recommended by the IETF's *OAuth 2.0 for Browser-Based Applications* best practice, because no token is ever exposed to JavaScript.
+
+### Sign-in
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant G as Gateway (BFF)
+    participant K as Keycloak
+
+    B->>G: GET /bff/login?returnUrl=/basket
+    G->>K: POST /par (client secret, PKCE challenge)
+    G-->>B: 302 → Keycloak /auth?request_uri=…
+    B->>K: login page, ada / ada
+    K-->>B: 302 → /signin-oidc?code=…&state=…
+    B->>G: GET /signin-oidc?code=…
+    G->>K: POST /token (code + PKCE verifier + client secret)
+    K-->>G: id, access and refresh tokens
+    G-->>B: 302 → /basket, Set-Cookie: storefront.session (HttpOnly, encrypted)
+```
+
+- The gateway is a **confidential client** (`storefront-bff`). It uses the authorization code flow with **PKCE**, and **PAR** (pushed authorization requests, automatic in .NET 9+ when the provider supports it).
+- Tokens are saved in the authentication ticket inside an **encrypted, HttpOnly, SameSite=Lax** cookie (chunked when large). Lax rather than Strict, because the cookie must be sent on the top-level redirect back from Keycloak.
+- The gateway asks for **`response_mode=query`**, so Keycloak returns the code with a top-level GET redirect instead of ASP.NET's default cross-site form POST. That lets the OIDC correlation and nonce cookies be **Lax / SameAsRequest**. The framework default (`SameSite=None; Secure`) is dropped over plain HTTP and breaks local sign-in with "Correlation failed", while Lax cookies would not be sent on a cross-site POST. The code in the URL is single-use and bound to the PKCE verifier.
+- `/bff/login` only accepts **local** return URLs, so it can't be used as an open redirect.
+- `/bff/logout` clears the cookie **and** ends the Keycloak SSO session (front-channel logout with `id_token_hint`).
+
+### Calling APIs
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant G as Gateway (BFF)
+    participant S as Basket.API
+    participant K as Keycloak
+
+    B->>G: GET /api/basket (cookie + X-CSRF: 1)
+    alt access token expires within 60 s
+        G->>K: refresh_token grant
+        K-->>G: new tokens (cookie re-issued)
+    end
+    G->>S: GET /api/basket, Authorization: Bearer <access token>
+    S->>S: validate signature, issuer, audience "storefront-api", map roles
+    S-->>B: ada's basket
+```
+
+- **Token relay:** a YARP request transform replaces the cookie with the user's access token. Requests that arrive with their own `Authorization` header (API clients, curl) pass through unchanged.
+- **Refresh:** Keycloak access tokens live 5 minutes. The cookie's `OnValidatePrincipal` refreshes them shortly before expiry and re-issues the cookie; if Keycloak refuses (session revoked, refresh token expired) the session ends and the next API call returns `401`.
+- **CSRF:** the gateway rejects cookie-authenticated `/api` requests that lack an `X-CSRF` header. A cross-site form or link can't add custom headers, and cross-origin scripts would need a CORS preflight that is never granted. The Angular interceptor adds the header.
+
+### Authorization in the services
+
+Each service validates the JWT itself (defense in depth: a service is never trusted just because a request came through the gateway):
+
+| Check | How |
+|---|---|
+| Signature and issuer | Keys and issuer from the realm's discovery document (`Identity:Authority`, optional `Identity:MetadataAddress`) |
+| Audience | Must contain `storefront-api`; a Keycloak **audience mapper** on the clients adds it |
+| Identity | `preferred_username` becomes `User.Identity.Name`; inbound claim mapping is off, so claim names stay as Keycloak issued them |
+| Roles | Keycloak's `realm_access.roles` are expanded into role claims, so `RequireRole("admin")` works |
+
+| Endpoint | Rule |
+|---|---|
+| `GET /api/products/**` | public |
+| `POST/PUT/DELETE /api/products/**` | policy `admin` |
+| `/api/basket/**` | signed in; the basket is the token user's |
+| `GET /api/orders` | signed in; the token user's orders |
+| `GET /api/orders/{id}` | owner or `admin`, otherwise `404` (not `403`, so IDs can't be probed) |
+
+When Basket falls back to calling Ordering over HTTP, a `ForwardAccessTokenHandler` relays the caller's bearer token, so Ordering creates the order for the same user. With RabbitMQ, the user name travels in the `BasketCheckedOut` event, published by a service that has already authenticated the user.
+
+### Keycloak realm
+
+[`deploy/keycloak/storefront-realm.json`](../deploy/keycloak/storefront-realm.json) is imported by Aspire (`WithRealmImport`), Docker Compose (`--import-realm`) and the Testcontainers tests:
+
+- realm roles `admin` and `customer`, with `customer` granted to every new user via the default role;
+- `storefront-bff`: confidential client, standard flow only, PKCE S256, redirect URIs for `localhost:4200` and `localhost:5100`;
+- `storefront-tests`: public client with the password grant, used only by the automated tests;
+- demo users `ada` (admin) and `grace` (customer).
+
+### Container networking (docker-compose)
+
+The browser reaches Keycloak at `localhost:8080`, containers reach it at `keycloak:8080`. Keycloak's hostname v2 options handle the split:
+
+- `KC_HOSTNAME=http://localhost:8080`: tokens are issued by, and browsers are sent to, `localhost:8080`.
+- `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`: back-channel URLs (token, JWKS) follow the request host, so containers keep using `keycloak:8080`.
+- Services use `Identity:Authority=http://localhost:8080/realms/storefront` (the issuer) and `Identity:MetadataAddress=http://keycloak:8080/…/.well-known/openid-configuration` (where to fetch it).
+
 ## Request flows
 
 ### Add to basket
@@ -288,8 +383,8 @@ sequenceDiagram
     participant B as Basket.API
     participant C as Catalog.API
 
-    UI->>GW: POST /api/basket/ada/items {productId, quantity}
-    GW->>B: forward
+    UI->>GW: POST /api/basket/items {productId, quantity} (cookie)
+    GW->>B: forward with Bearer token
     B->>C: GET /api/products/{productId}
     alt product exists
         C-->>B: 200 {name, price, imageUrl}
@@ -312,8 +407,8 @@ sequenceDiagram
     participant MQ as RabbitMQ
     participant O as Ordering.API
 
-    UI->>GW: POST /api/basket/ada/checkout {shippingAddress}
-    GW->>B: forward
+    UI->>GW: POST /api/basket/checkout {shippingAddress} (cookie)
+    GW->>B: forward with Bearer token
     B->>B: load cart (400 if empty), new orderId
     B->>MQ: publish BasketCheckedOut {orderId, items, address}
     MQ-->>B: confirm
@@ -396,6 +491,18 @@ An outbox needs a transactional store next to the business data. Catalog has Pos
 </details>
 
 <details>
+<summary><b>BFF instead of tokens in the SPA</b></summary>
+
+A browser-based OIDC client (PKCE in Angular) would keep access and refresh tokens in JavaScript-reachable storage, so any XSS bug could steal them. With the gateway as BFF, the browser holds only an HttpOnly cookie, and the gateway can refresh tokens with a client secret. The Angular app also needs no OIDC library. The costs are a stateful gateway session and CSRF protection, both handled in a few dozen lines.
+</details>
+
+<details>
+<summary><b>Services validate tokens even behind the gateway</b></summary>
+
+Zero trust between hops: a misrouted request, a new internal caller or a compromised neighbour can't act as a user without a valid, correctly-scoped token. Each check is local (cached signing keys), so it costs almost nothing.
+</details>
+
+<details>
 <summary><b>Each service owns its contracts</b></summary>
 
 `ShippingAddress` exists in both Basket and Ordering. The duplication is deliberate: each service can evolve its contract independently, as long as the JSON stays compatible.
@@ -404,7 +511,7 @@ An outbox needs a transactional store next to the business data. Catalog has Pos
 <details>
 <summary><b>A gateway instead of direct calls from the browser</b></summary>
 
-One origin means no CORS, a single place for future auth, rate limiting and caching, and freedom to split or merge services without front-end changes.
+One origin means no CORS, a first-party session cookie, a single place for sign-in, rate limiting and caching, and freedom to split or merge services without front-end changes.
 </details>
 
 ## Testing strategy
@@ -414,6 +521,9 @@ One origin means no CORS, a single place for future auth, rate limiting and cach
 | Service API | xUnit v3, `WebApplicationFactory<TMarker>` (in-memory stores) | Real HTTP pipeline: routing, validation, status codes, JSON contracts |
 | Service isolation | `ConfigureTestServices` with fake typed clients | Basket logic without running Catalog or Ordering |
 | Persistence | Testcontainers (PostgreSQL 18, Redis 8) | Migrations and seeding, SQL filtering and paging, `ILIKE` escaping, data surviving an app restart, Redis TTL and case-insensitive keys |
+| Authorization rules | Test authentication handler (`X-Test-User` / `X-Test-Roles`) | 401 for anonymous calls, 403 for non-admins, per-user basket and order isolation, admin access to any order |
+| Real tokens | Testcontainers (Keycloak 26 with the project realm) | Signature, issuer and audience validation, realm-role mapping (admin vs customer), tampered tokens rejected |
+| BFF sign-in (end to end) | Keycloak container + the real gateway + an echo backend | `/bff/login` → Keycloak login form → `/signin-oidc` → HttpOnly session → `/bff/user` roles → access token relayed with the right audience → logout ends the SSO session |
 | Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
@@ -423,7 +533,10 @@ One origin means no CORS, a single place for future auth, rate limiting and cach
 
 These are intentional simplifications for a demo:
 
-- **No authentication.** The "user" is a name stored in the browser. Never ship this as is.
+- **Development secrets in the realm file.** The BFF client secret and demo passwords are committed for local use; production would inject them and drop the `storefront-tests` client.
+- **Gateway session keys aren't shared.** ASP.NET Core data protection keys live in the container, so restarting or scaling the gateway signs users out. Persist them (Redis, a volume or a key vault) to fix this.
+- **Data is keyed by user name**, not the stable `sub` claim. Keycloak lets admins rename users, which would orphan their baskets and orders.
+- **Logout is a GET**, so a malicious page could sign a user out (logout CSRF). This is low impact, but a POST with an antiforgery token would remove it.
 - **Migrations run at startup.** That is fine for one replica; with several, run migrations as a separate deployment step.
 - **Basket updates are last-write-wins.** Two simultaneous "add item" requests for the same user can overwrite each other. Redis transactions (`WATCH`/`MULTI`) or a hash per basket would fix this.
 - **In-memory fallback** (when no connection string is set) loses data on restart and must not be scaled out.

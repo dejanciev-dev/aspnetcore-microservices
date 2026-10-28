@@ -23,7 +23,7 @@ The storefront in [`src/Web/storefront`](../src/Web/storefront) is a single-page
 | Order history | `/orders` | Ordering.API |
 | Order confirmation and details (polls while an async order is processed) | `/orders/:id` | Ordering.API |
 
-The header shows a live basket badge and an editable **user name**. Without authentication, this name keys the basket and the orders, and it is stored in `localStorage`.
+The header shows a live basket badge and **Sign in / Sign out**. Browsing is public; basket, checkout and orders need a signed-in user. Admins see a price editor on the product page.
 
 ## Structure
 
@@ -33,7 +33,7 @@ src/app/
 ├── core/                                    # app-wide singletons and contracts
 │   ├── models.ts                            # TypeScript mirrors of the API contracts
 │   ├── basket-store.ts                      # signal-based basket state
-│   ├── user-session.ts                      # current user name (localStorage)
+│   ├── auth.ts                              # AuthService (BFF session), guard, interceptor
 │   ├── problem-details.ts                   # RFC 9457 → readable message
 │   └── toast.ts                             # notifications
 ├── shared/                                  # reusable UI and actions
@@ -49,6 +49,16 @@ src/app/
 File names follow the current Angular style guide (`product-list.ts`, not `product-list.component.ts`).
 
 ## Key patterns
+
+### Authentication without tokens (BFF)
+
+The gateway handles OpenID Connect with Keycloak and keeps the tokens in an HttpOnly cookie, so the app has no OIDC library and never touches a token. [`auth.ts`](../src/Web/storefront/src/app/core/auth.ts) holds everything the app needs:
+
+- **`AuthService`**: loads `/bff/user` once at startup through `provideAppInitializer`, so the header and guards know the session before the first route renders. It exposes `user`, `isAuthenticated` and `isAdmin` signals. `login()` and `logout()` are full-page navigations to `/bff/login?returnUrl=…` and `/bff/logout`.
+- **`authGuard`**: on basket, checkout and orders, sends anonymous visitors to sign in and back to the page they wanted.
+- **`bffInterceptor`**: adds the `X-CSRF` header the gateway requires on `/api` calls, and starts a new sign-in if a call returns `401` for a user we thought was signed in (expired session).
+
+Features react to the session through signals: `BasketStore`'s `httpResource` only loads once `isAuthenticated()` is true, and "Add to basket" redirects anonymous visitors to sign in.
 
 ### Zoneless and signal-first
 
@@ -78,7 +88,7 @@ When a query parameter changes, the input signal changes, the resource re-reques
 
 [`BasketStore`](../src/Web/storefront/src/app/core/basket-store.ts) shows that a store can be a single injectable:
 
-- **Reads:** an `httpResource` keyed on the current user (switching user refetches automatically)
+- **Reads:** an `httpResource` that only runs once a user is signed in (`/api/basket`; the user comes from the session)
 - **Derived state:** `computed()` for the cart and `itemCount`
 - **Writes:** `HttpClient` calls; the server's response is written back with `resource.set(cart)`, so the server stays the source of truth
 
@@ -145,7 +155,8 @@ Tests use **Vitest** through the Angular CLI (`@angular/build:unit-test`) with `
 
 | Spec | Covers |
 |---|---|
-| `app.spec.ts` | Shell renders; basket badge reflects the server cart |
+| `app.spec.ts` | Anonymous visitors get "Sign in" and no basket call; signed-in users see their name, admin role and basket badge |
+| `core/auth.spec.ts` | Session loading (including an unreachable gateway), `X-CSRF` only on `/api`, re-sign-in on `401`, guard redirect |
 | `core/basket-store.spec.ts` | Load per user, add-item request shape, checkout clears local state |
 | `features/catalog/product-list.spec.ts` | Query params become request params; cards, active chip and pager render; unreachable-gateway message |
 | `features/checkout/checkout-page.spec.ts` | Signal Form validation blocks submit; a valid form posts the exact address |

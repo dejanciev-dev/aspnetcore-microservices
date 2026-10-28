@@ -9,6 +9,7 @@ All endpoints are available through the **API gateway** at `http://localhost:510
 | Ordering | http://localhost:5103/scalar | http://localhost:5103/openapi/v1.json |
 
 - [Conventions](#conventions)
+- [Authentication](#authentication)
 - [Catalog](#catalog)
 - [Basket](#basket)
 - [Ordering](#ordering)
@@ -23,6 +24,25 @@ All endpoints are available through the **API gateway** at `http://localhost:510
 - Money values are **decimals** (for example `129.99`).
 - Errors are **RFC 9457 ProblemDetails** (`application/problem+json`); see [Errors](#errors).
 - Every service exposes `GET /health`.
+
+---
+
+## Authentication
+
+APIs accept **Keycloak access tokens** as `Authorization: Bearer <token>`. The token must be issued by the `storefront` realm and carry the `storefront-api` audience. The storefront itself never sends tokens: it uses the gateway's session cookie (BFF), and the gateway attaches the token.
+
+| Endpoint | Access |
+|---|---|
+| `GET /bff/user` | public: `{ isAuthenticated, name, displayName, roles }` |
+| `GET /bff/login?returnUrl=/path` | starts sign-in (redirect to Keycloak); only local return URLs are honoured |
+| `GET /bff/logout` | ends the gateway session and the Keycloak SSO session |
+
+Calls authenticated by the gateway session cookie must include `X-CSRF: 1`, otherwise the gateway returns `403`.
+
+| Status | Meaning |
+|---|---|
+| `401 Unauthorized` | No token, or an invalid or expired one |
+| `403 Forbidden` | Valid token, but missing the required role (e.g. `admin`), or a missing `X-CSRF` header |
 
 ---
 
@@ -74,7 +94,7 @@ GET /api/products?category=Audio&pageSize=2
 
 ### `POST /api/products`
 
-Creates a product. Returns `201 Created` with a `Location` header.
+Requires the **`admin`** role. Creates a product. Returns `201 Created` with a `Location` header.
 
 ```json
 {
@@ -96,21 +116,21 @@ Creates a product. Returns `201 Created` with a `Location` header.
 
 ### `PUT /api/products/{id}`
 
-Same body as `POST`. Returns `204` or `404`.
+Requires **`admin`**. Same body as `POST`. A price change publishes `ProductPriceChanged` (see [architecture.md](architecture.md#messaging)). Returns `204` or `404`.
 
 ### `DELETE /api/products/{id}`
 
-Returns `204` or `404`.
+Requires **`admin`**. Returns `204` or `404`.
 
 ---
 
 ## Basket
 
-The basket is identified by the `{userName}` route segment.
+All basket endpoints require a signed-in user and always act on **that user's** basket (the name comes from the token).
 
-### `GET /api/basket/{userName}`
+### `GET /api/basket`
 
-Always `200`. An unknown user gets an empty basket.
+Always `200`. A user without a basket gets an empty one.
 
 ```json
 {
@@ -129,7 +149,7 @@ Always `200`. An unknown user gets an empty basket.
 }
 ```
 
-### `POST /api/basket/{userName}/items`
+### `POST /api/basket/items`
 
 Adds a product, or increases its quantity if it is already in the basket. **Name and price come from Catalog**, not from the request.
 
@@ -144,15 +164,15 @@ Adds a product, or increases its quantity if it is already in the basket. **Name
 
 Returns `200` with the updated basket.
 
-### `DELETE /api/basket/{userName}/items/{productId}`
+### `DELETE /api/basket/items/{productId}`
 
 Removes one product. Returns `200` with the updated basket.
 
-### `DELETE /api/basket/{userName}`
+### `DELETE /api/basket`
 
 Clears the basket. Returns `204`.
 
-### `POST /api/basket/{userName}/checkout`
+### `POST /api/basket/checkout`
 
 Creates an order in Ordering from the current basket, then clears the basket.
 
@@ -182,9 +202,11 @@ Returns `400` if the basket is empty.
 
 ## Ordering
 
-### `GET /api/orders?userName={userName}`
+All order endpoints require a signed-in user.
 
-A user's orders, newest first.
+### `GET /api/orders`
+
+The signed-in user's orders, newest first.
 
 ```json
 [
@@ -218,15 +240,14 @@ A user's orders, newest first.
 
 ### `GET /api/orders/{id}`
 
-`200` with an order, or `404`.
+`200` with the order if it belongs to the caller (or the caller is `admin`), otherwise `404`.
 
 ### `POST /api/orders`
 
-Used internally by Basket during checkout, but callable directly.
+Used by Basket's HTTP checkout fallback (with the caller's token relayed), but callable directly. The order is created for the **authenticated** user.
 
 ```json
 {
-  "userName": "ada",
   "items": [
     { "productId": "4f1c9a0e-0001-4a6e-9b1a-000000000003", "productName": "4K Monitor", "unitPrice": 399.00, "quantity": 2 }
   ],
@@ -236,7 +257,6 @@ Used internally by Basket during checkout, but callable directly.
 
 | Field | Rules |
 |---|---|
-| `userName` | required, up to 64 characters |
 | `items` | required, at least one |
 | `shippingAddress` | required, all fields required |
 

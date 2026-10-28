@@ -12,6 +12,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-8-FF4438?logo=redis&logoColor=white)
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-4-FF6600?logo=rabbitmq&logoColor=white)
+![Keycloak](https://img.shields.io/badge/Keycloak-26-4D4D4D?logo=keycloak&logoColor=white)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-425CC7?logo=opentelemetry&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -30,13 +31,14 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 - **Polyglot persistence**: PostgreSQL + EF Core 10 for catalog and orders, Redis for baskets
 - **Event-driven integration over RabbitMQ**: a transactional outbox, idempotent consumers, dead-letter queues and asynchronous checkout
 - **A single entry point** (YARP reverse proxy), so the browser only talks to one origin
+- **Authentication with Keycloak using the BFF pattern**: OIDC + PKCE in the gateway, no tokens in the browser, JWT validation and role-based authorization in every service
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
 - **Three ways to run it**: plain `dotnet run`, .NET Aspire, or Docker Compose
 - **A modern Angular front end** that is zoneless, signal-based and uses `httpResource` and Signal Forms
 - **Automated quality gates**: integration tests, component tests and GitHub Actions CI
 
-> **Zero-infrastructure fallback:** a service uses its database only when a connection string is configured, which Aspire and Docker Compose do automatically. Without one (plain `dotnet run`, the fast test suite) it falls back to an in-memory store, so you can still clone and run the whole system in seconds without Docker.
+> **Infrastructure fallback:** a service uses its database or RabbitMQ only when a connection string is configured, which Aspire and Docker Compose do automatically. Without one (plain `dotnet run`, the fast test suite) it falls back to an in-memory store and synchronous HTTP. Signing in always needs Keycloak, which is a single container (`docker compose up -d keycloak`).
 
 ## 🏗️ Architecture
 
@@ -49,8 +51,10 @@ flowchart LR
     end
 
     subgraph edge [Edge]
-        gw[YARP API Gateway<br/><sub>:5100</sub>]
+        gw[YARP API Gateway + BFF<br/><sub>:5100</sub>]
     end
+
+    kc[Keycloak<br/><sub>:8080</sub>]
 
     subgraph services [Microservices]
         catalog[Catalog.API<br/><sub>:5101</sub>]
@@ -68,7 +72,8 @@ flowchart LR
     otel[(Aspire Dashboard<br/>OTLP · logs · traces · metrics)]
 
     user --> spa
-    spa -- "/api/*" --> gw
+    spa -- "/api/* · /bff/* (cookie)" --> gw
+    gw -. "OIDC code + PKCE" .-> kc
     gw -- "/api/products/**" --> catalog
     gw -- "/api/basket/**" --> basket
     gw -- "/api/orders/**" --> ordering
@@ -89,8 +94,8 @@ flowchart LR
 | **Catalog.API** | Products, categories, search and paging | **PostgreSQL** via EF Core 10; migrations, seeding, `ILIKE` search; publishes `ProductPriceChanged` through a **transactional outbox** |
 | **Basket.API** | Per-user shopping cart and checkout | **Redis** with a sliding 30-day expiry; **never trusts client prices**; reprices carts on events; **asynchronous checkout** |
 | **Ordering.API** | Order creation and history | **PostgreSQL** via EF Core 10; creates orders from `BasketCheckedOut` **idempotently** |
-| **ApiGateway** | Single public entry point | YARP reverse proxy, config-driven routes |
-| **BuildingBlocks.Common** | Shared cross-cutting concerns | OpenAPI + Scalar, ProblemDetails, health checks, resilience, OpenTelemetry |
+| **ApiGateway** | Single public entry point and **BFF** | YARP reverse proxy; OIDC sign-in with Keycloak, HttpOnly session cookie, token refresh and relay, CSRF check |
+| **BuildingBlocks.Common** | Shared cross-cutting concerns | OpenAPI + Scalar, ProblemDetails, health checks, resilience, OpenTelemetry, Keycloak JWT validation |
 | **BuildingBlocks.Messaging** | Integration events | RabbitMQ.Client 7 publisher (confirms) and consumer host (retries, DLQ), EF Core outbox + relay, trace propagation |
 | **AppHost** | Local orchestration | .NET Aspire 13: starts everything, wires URLs, hosts the dashboard |
 | **Storefront** | Customer-facing SPA | Angular 21, zoneless, signals, `httpResource`, Signal Forms |
@@ -106,6 +111,7 @@ flowchart LR
 | **API docs** | `Microsoft.AspNetCore.OpenApi` + [Scalar](https://scalar.com/) UI |
 | **Data** | PostgreSQL 18 + EF Core 10 (Npgsql), Redis 8 (StackExchange.Redis), Aspire client integrations |
 | **Messaging** | RabbitMQ 4 with RabbitMQ.Client 7 (async API), transactional outbox, Aspire RabbitMQ integration |
+| **Identity** | Keycloak 26 (realm as code), OpenID Connect + PKCE, BFF pattern, JWT bearer with audience and role checks |
 | **Gateway** | [YARP](https://microsoft.github.io/reverse-proxy/) 2.3 |
 | **Resilience** | `Microsoft.Extensions.Http.Resilience` (Polly v8 standard pipeline) |
 | **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter |
@@ -123,7 +129,7 @@ flowchart LR
 |---|---|---|
 | [.NET SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 10.0.100+ | everything (pinned in [`global.json`](global.json)) |
 | [Node.js](https://nodejs.org/) | 22 LTS | the Angular storefront |
-| [Docker](https://www.docker.com/) | recommended | PostgreSQL, Redis and RabbitMQ (Aspire or Compose) and the integration tests |
+| [Docker](https://www.docker.com/) | yes | Keycloak (sign-in); PostgreSQL, Redis and RabbitMQ (Aspire or Compose); the integration tests |
 
 ```bash
 git clone https://github.com/dejanciev-dev/aspnetcore-microservices.git
@@ -137,11 +143,13 @@ cd src/Web/storefront && npm install && cd ../../..
 dotnet run --project src/Aspire/AppHost
 ```
 
-One command starts **PostgreSQL, Redis and RabbitMQ containers**, all three services, the gateway and the Angular dev server. It wires connection strings and URLs together and opens the **Aspire dashboard**, which shows live logs, metrics and **distributed traces**. A single trace follows a checkout from the gateway through Basket, across RabbitMQ and into Ordering's database insert.
+One command starts **Keycloak, PostgreSQL, Redis and RabbitMQ containers**, all three services, the gateway and the Angular dev server. It wires connection strings and URLs together and opens the **Aspire dashboard**, which shows live logs, metrics and **distributed traces**. A single trace follows a checkout from the gateway through Basket, across RabbitMQ and into Ordering's database insert.
 
-### Option 2: run each project yourself (no Docker: in-memory stores, HTTP checkout)
+### Option 2: run each project yourself (in-memory stores, HTTP checkout)
 
 ```bash
+docker compose up -d keycloak          # the only container this mode needs
+
 # four terminals (or use your IDE's multi-project launch)
 dotnet run --project src/Services/Catalog/Catalog.API
 dotnet run --project src/Services/Basket/Basket.API
@@ -160,12 +168,24 @@ docker compose up --build
 
 On first start, Catalog and Ordering apply their EF Core migrations and Catalog seeds its products. Data lives in named volumes, so it survives `docker compose down` (use `down -v` to reset).
 
+### Sign in
+
+The realm is imported automatically with two demo users:
+
+| User | Password | Roles | Can |
+|---|---|---|---|
+| `ada` | `ada` | `admin`, `customer` | shop, and change product prices on the product page |
+| `grace` | `grace` | `customer` | shop |
+
+New accounts can also be registered from the Keycloak login page.
+
 ### Where to go
 
 | URL | What |
 |---|---|
 | http://localhost:4200 | 🛍️ Storefront (Angular) |
-| http://localhost:5100 | 🚪 API gateway |
+| http://localhost:5100 | 🚪 API gateway (BFF) |
+| http://localhost:8080 | 🔐 Keycloak; admin console `admin` / `admin` |
 | http://localhost:5101/scalar | 📘 Catalog API docs (Scalar) |
 | http://localhost:5102/scalar | 📘 Basket API docs |
 | http://localhost:5103/scalar | 📘 Ordering API docs |
@@ -177,33 +197,68 @@ On first start, Catalog and Ordering apply their EF Core migrations and Catalog 
 
 ## 🔌 API at a glance
 
-All routes are reachable through the gateway at `http://localhost:5100`.
+All routes are reachable through the gateway at `http://localhost:5100`. The user always comes from the access token, never from the URL.
 
-| Method | Route | Description |
-|---|---|---|
-| `GET` | `/api/products?category=&search=&page=&pageSize=` | Paged and filtered product list |
-| `GET` | `/api/products/categories` | Distinct categories |
-| `GET` | `/api/products/{id}` | Product details |
-| `POST` / `PUT` / `DELETE` | `/api/products[/{id}]` | Manage products |
-| `GET` | `/api/basket/{userName}` | Current basket |
-| `POST` | `/api/basket/{userName}/items` | Add an item (price is looked up in Catalog) |
-| `DELETE` | `/api/basket/{userName}/items/{productId}` | Remove an item |
-| `POST` | `/api/basket/{userName}/checkout` | Turn the basket into an order (via RabbitMQ when available) |
-| `GET` | `/api/orders?userName=` | A user's orders, newest first |
-| `GET` | `/api/orders/{id}` | Order details |
+| Method | Route | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/products?category=&search=&page=&pageSize=` | public | Paged and filtered product list |
+| `GET` | `/api/products/categories` | public | Distinct categories |
+| `GET` | `/api/products/{id}` | public | Product details |
+| `POST` / `PUT` / `DELETE` | `/api/products[/{id}]` | `admin` | Manage products |
+| `GET` | `/api/basket` | signed in | Your basket |
+| `POST` | `/api/basket/items` | signed in | Add an item (price is looked up in Catalog) |
+| `DELETE` | `/api/basket/items/{productId}` | signed in | Remove an item |
+| `POST` | `/api/basket/checkout` | signed in | Turn the basket into an order (via RabbitMQ when available) |
+| `GET` | `/api/orders` | signed in | Your orders, newest first |
+| `GET` | `/api/orders/{id}` | owner or `admin` | Order details |
 
 ```bash
+# API clients authenticate with a bearer token (the browser uses the BFF session cookie instead)
+TOKEN=$(curl -s http://localhost:8080/realms/storefront/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=storefront-tests -d username=ada -d password=ada | jq -r .access_token)
+
 # add a 4K monitor to ada's basket, then check out
-curl -X POST http://localhost:5100/api/basket/ada/items \
+curl -X POST http://localhost:5100/api/basket/items -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"productId":"4f1c9a0e-0001-4a6e-9b1a-000000000003","quantity":1}'
 
-curl -X POST http://localhost:5100/api/basket/ada/checkout \
+curl -X POST http://localhost:5100/api/basket/checkout -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"shippingAddress":{"fullName":"Ada Lovelace","street":"1 Main St","city":"London","country":"UK","zipCode":"N1 9GU"}}'
 ```
 
 ➡️ Full reference with request and response examples: **[docs/api-reference.md](docs/api-reference.md)**.
+
+## 🔐 Security
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (Angular)
+    participant G as Gateway (BFF)
+    participant K as Keycloak
+    participant S as Basket.API
+
+    B->>G: GET /bff/login?returnUrl=/basket
+    G->>K: PAR + redirect (code flow, PKCE)
+    K-->>B: login page
+    B->>K: ada / ada
+    K-->>G: /signin-oidc?code=…
+    G->>K: code → tokens (back-channel, client secret)
+    G-->>B: Set-Cookie: storefront.session (HttpOnly, encrypted)
+    B->>G: GET /api/basket + cookie + X-CSRF
+    G->>S: GET /api/basket + Authorization: Bearer <access token>
+    S-->>B: ada's basket
+```
+
+- **BFF pattern** (as recommended by *OAuth 2.0 for Browser-Based Applications*): tokens never reach JavaScript. The gateway is a confidential OIDC client using the authorization code flow with **PKCE** and **PAR**, and stores tokens in an encrypted, **HttpOnly, SameSite=Lax** cookie.
+- **Token lifecycle:** access tokens live 5 minutes; the gateway refreshes them shortly before expiry, and ends the session if refresh fails.
+- **CSRF:** cookie-authenticated `/api` calls must carry an `X-CSRF` header, which cross-site forms can't add.
+- **APIs validate every request themselves** (defense in depth): Keycloak signature and issuer, the `storefront-api` **audience**, and Keycloak realm roles mapped to .NET roles.
+- **Authorization:** catalog writes need the `admin` role; baskets and orders belong to the user in the token. Other users' orders return `404`, so IDs can't be probed.
+- **Token relay:** Basket forwards the caller's token when it calls Ordering over HTTP.
+- **Realm as code:** [`deploy/keycloak/storefront-realm.json`](deploy/keycloak/storefront-realm.json) defines clients, roles and demo users. Aspire, Compose and the tests all import it. Its secrets are for local development only.
+
+➡️ Details: [docs/architecture.md](docs/architecture.md#security).
 
 ## 📨 Messaging
 
@@ -225,6 +280,7 @@ curl -X POST http://localhost:5100/api/basket/ada/checkout \
 The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Angular features:
 
 - **Zoneless change detection**: no zone.js, rendering driven entirely by signals
+- **No OIDC library needed**: thanks to the BFF, the app just asks `/bff/user` who is signed in; a route guard and an HTTP interceptor (CSRF header, expired sessions) do the rest
 - **`httpResource`**: declarative, reactive data loading that refetches when its inputs (route params, user) change
 - **Signal Forms** (`@angular/forms/signals`) for the checkout form, with schema-based validation
 - **Router input binding**: query and route params arrive as component `input()`s
@@ -237,12 +293,12 @@ The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Ang
 ## 🧪 Testing
 
 ```bash
-dotnet test                                          # 11 API tests + 13 database/messaging tests (xUnit v3)
-cd src/Web/storefront && npx ng test --watch=false   # 11 unit/component tests (Vitest)
+dotnet test                                          # 20 API tests + 18 container-backed tests (xUnit v3)
+cd src/Web/storefront && npx ng test --watch=false   # 17 unit/component tests (Vitest)
 ```
 
-- **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. Downstream services are replaced by fakes, so Basket is tested without Catalog or Ordering running.
-- **Integration tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18, Redis 8 and RabbitMQ 4 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across restarts and Redis expiry. They also run **end-to-end messaging flows across two live services**: a price change repricing a basket via the outbox, checkout creating an order via RabbitMQ, and a duplicate message producing exactly one order. Without Docker they are skipped locally; in CI they must run.
+- **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. A test authentication handler stands in for Keycloak, which keeps authorization rules (401, 403, per-user isolation) fast to test. Downstream services are replaced by fakes.
+- **Integration tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18, Redis 8 and RabbitMQ 4 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across restarts and Redis expiry. They also run **end-to-end messaging flows across two live services**: a price change repricing a basket via the outbox, checkout creating an order via RabbitMQ, and a duplicate message producing exactly one order. **Keycloak** tests validate real tokens (signature, audience, role mapping) and drive a **full browser-style BFF sign-in** through the real login page, down to the access token the gateway relays. Without Docker they are skipped locally; in CI they must run.
 - **Front end:** stores and components are tested with `HttpTestingController`, covering request shapes, rendering, validation and error states.
 - **CI** runs both suites and builds every Docker image on each push and pull request.
 
@@ -264,7 +320,8 @@ aspnetcore-microservices/
 │   └── Dockerfile                       # shared image for all .NET services
 ├── tests/
 │   ├── Services.Tests/                  # API tests (in-memory, fast)
-│   └── Services.IntegrationTests/       # PostgreSQL, Redis, RabbitMQ via Testcontainers
+│   └── Services.IntegrationTests/       # PostgreSQL, Redis, RabbitMQ, Keycloak via Testcontainers
+├── deploy/keycloak/                     # Keycloak realm (clients, roles, demo users)
 ├── docs/                                # architecture, API, front end, setup
 ├── docker-compose.yml
 ├── global.json                          # SDK pin + Microsoft.Testing.Platform opt-in
@@ -278,7 +335,7 @@ Each service follows the same layout: `Program.cs` (composition root), `Endpoint
 
 - [x] Real persistence: PostgreSQL + EF Core (Catalog, Ordering), Redis (Basket), provisioned by Aspire and Compose
 - [x] Asynchronous messaging over RabbitMQ with a transactional outbox and idempotent consumers
-- [ ] Authentication with Keycloak / Entra ID (OIDC), replacing the demo user name
+- [x] Authentication with Keycloak (OIDC, BFF pattern), replacing the demo user name
 - [ ] Rate limiting and output caching at the gateway
 - [ ] Contract tests between Basket and its downstream services
 - [ ] Playwright end-to-end tests
