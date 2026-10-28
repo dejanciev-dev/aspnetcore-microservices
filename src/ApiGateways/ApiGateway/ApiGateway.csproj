@@ -15,4 +15,8 @@
     <ProjectReference Include="..\..\BuildingBlocks\BuildingBlocks.Common\BuildingBlocks.Common.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Services.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -46,7 +46,8 @@ public static class ServiceDefaults
             .WithMetrics(metrics => metrics
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
-                .AddRuntimeInstrumentation())
+                .AddRuntimeInstrumentation()
+                .AddMeter("Microsoft.AspNetCore.RateLimiting"))   // leases, queueing and rejections
             .WithTracing(tracing => tracing
                 .AddSource(builder.Environment.ApplicationName)
                 .AddSource("BuildingBlocks.Messaging")   // RabbitMQ publish/process spans

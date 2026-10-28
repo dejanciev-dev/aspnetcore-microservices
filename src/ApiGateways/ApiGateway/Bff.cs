@@ -129,7 +129,8 @@ internal static class Bff
         var bff = app.MapGroup("/bff").WithTags("BFF");
 
         bff.MapGet("/login", (string? returnUrl) =>
-            TypedResults.Challenge(new AuthenticationProperties { RedirectUri = LocalPath(returnUrl) }));
+                TypedResults.Challenge(new AuthenticationProperties { RedirectUri = LocalPath(returnUrl) }))
+            .RequireRateLimiting(RateLimiting.LoginPolicy);   // each start costs Keycloak a PAR request
 
         // Ends the local session and the Keycloak SSO session, then returns to the storefront.
         bff.MapGet("/logout", () =>
