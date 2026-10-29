@@ -8,6 +8,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Also here, not only in the base: the base's namespace doesn't apply to what this overlay generates
+# (storefront-secrets), and Kustomize only rewrites references to the hashed name within a namespace.
+namespace: storefront
+
 resources:
   - ../../base
 
