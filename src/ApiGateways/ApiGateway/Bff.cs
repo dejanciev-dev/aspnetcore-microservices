@@ -29,11 +29,21 @@ internal static class Bff
         var identity = builder.Configuration.GetSection("Identity");
 
         // Behind nginx or the Angular dev proxy: honour X-Forwarded-* so redirect URIs use the public host.
+        var knownNetworks = builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [];
         builder.Services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
             options.KnownIPNetworks.Clear();
             options.KnownProxies.Clear();
+
+            // With the proxies' networks configured (a cloud ingress in front of nginx), only they are
+            // trusted and the whole chain is unwound back to the real client. Without, every source is
+            // trusted for one hop: enough for nginx or the dev proxy alone.
+            if (knownNetworks.Length > 0)
+            {
+                foreach (var network in knownNetworks) options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+                options.ForwardLimit = null;
+            }
         });
 
         builder.Services
