@@ -36,7 +36,7 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 - **Output caching at the edge**: catalog reads are served by the gateway and evicted when an admin changes a product
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
-- **Three ways to run it**: plain `dotnet run`, .NET Aspire, or Docker Compose
+- **Five ways to run it**: plain `dotnet run`, .NET Aspire, Docker Compose, Kubernetes (Kustomize, verified on kind in CI) or Azure Container Apps (`azd up`)
 - **A modern Angular front end** that is zoneless, signal-based and uses `httpResource` and Signal Forms
 - **Automated quality gates**: integration tests, component tests and GitHub Actions CI
 
@@ -169,6 +169,15 @@ docker compose up --build
 ```
 
 On first start, Catalog and Ordering apply their EF Core migrations and Catalog seeds its products. Data lives in named volumes, so it survives `docker compose down` (use `down -v` to reset).
+
+### Option 4: Kubernetes or Azure Container Apps
+
+```bash
+kubectl apply -k deploy/k8s/overlays/kind   # a local kind cluster, same URLs as Compose
+azd up                                      # Azure Container Apps, PostgreSQL Flexible Server, ACR
+```
+
+➡️ Details: [docs/deployment.md](docs/deployment.md).
 
 ### Sign in
 
@@ -329,7 +338,11 @@ aspnetcore-microservices/
 │   ├── Services.ContractTests/          # Pact contracts: Basket ↔ Catalog, Ordering (HTTP + events)
 │   ├── e2e/                             # Playwright browser tests against the running stack
 │   └── Services.IntegrationTests/       # PostgreSQL, Redis, RabbitMQ, Keycloak via Testcontainers
-├── deploy/keycloak/                     # Keycloak realm (clients, roles, demo users)
+├── deploy/
+│   ├── keycloak/                        # Keycloak realm (clients, roles, demo users) + Azure image
+│   └── k8s/                             # Kustomize base + kind overlay
+├── infra/                               # Bicep for Azure Container Apps (azd)
+├── azure.yaml                           # azd services
 ├── docs/                                # architecture, API, front end, setup
 ├── docker-compose.yml
 ├── global.json                          # SDK pin + Microsoft.Testing.Platform opt-in
@@ -348,13 +361,15 @@ Each service follows the same layout: `Program.cs` (composition root), `Endpoint
 - [x] Output caching at the gateway (catalog reads)
 - [x] Contract tests between Basket and its downstream services (Pact, HTTP and events)
 - [x] Playwright end-to-end tests
-- [ ] Kubernetes manifests / Azure Container Apps deployment via `azd`
+- [x] Kubernetes manifests (Kustomize), deployed to kind and tested end to end in CI
+- [x] Azure Container Apps deployment via `azd` (Bicep; built and linted in CI, not deployed by it)
 
 ## 📚 Documentation
 
 | Document | Contents |
 |---|---|
 | [Getting started](docs/getting-started.md) | Setup, run modes, configuration, troubleshooting |
+| [Deployment](docs/deployment.md) | Kubernetes (Kustomize, kind) and Azure Container Apps (azd, Bicep) |
 | [Architecture](docs/architecture.md) | Services, communication, design decisions, observability |
 | [API reference](docs/api-reference.md) | Every endpoint with examples and error formats |
 | [Front end](docs/frontend.md) | Angular structure, state, data loading, forms, testing |

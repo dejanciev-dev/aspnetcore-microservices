@@ -102,6 +102,10 @@ The compose file builds:
 
 Stop everything with `docker compose down`. Data is kept in the `postgres-data`, `redis-data` and `rabbitmq-data` volumes; `docker compose down -v` resets it. Set `POSTGRES_PASSWORD` / `RABBITMQ_PASSWORD` in a `.env` file to change the default passwords.
 
+### 4. Kubernetes and Azure Container Apps
+
+See [Deployment](deployment.md): a Kustomize base with a kind overlay, and `azd up` for Azure Container Apps.
+
 ## Ports
 
 | Component | Local (`dotnet run` / Aspire) | Docker Compose (host) |
@@ -131,6 +135,9 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 | `RateLimiting:Checkout:*` / `RateLimiting:Login:*` | gateway | 5 / 10 per 60 s | Fixed windows for checkout and sign-in starts (`PermitLimit`, `WindowSeconds`) |
 | `OutputCaching:CatalogSeconds` | gateway | `60` | How long catalog reads are cached at the gateway |
 | `Identity:ClientId` / `Identity:ClientSecret` | gateway | `storefront-bff` / dev secret | The BFF's confidential client; override the secret outside development |
+| `Identity:RequireHttpsMetadata` | all services, gateway | `true` outside Development | Set `false` only for a plain-HTTP Keycloak (the kind overlay) |
+| `Bff:PublicOrigin` | gateway | *(unset)* | Fixed public origin for OIDC redirect URIs and Secure cookies behind several proxies (Azure Container Apps) |
+| `ForwardedHeaders:KnownNetworks` | gateway | *(unset: trust one hop from anywhere)* | CIDRs of trusted proxies; the gateway then unwinds the whole `X-Forwarded-For` chain to the real client |
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
 | `ConnectionStrings:redis` | Basket.API | *(unset → in-memory)* | StackExchange.Redis configuration string, e.g. `localhost:6379` |
@@ -283,7 +290,7 @@ The gateway builds the callback URL from the host the browser used. Only `http:/
 <details>
 <summary><b>Signing in ends with "Correlation failed" or loops back to the login page</b></summary>
 
-The browser didn't send back the OIDC correlation cookie. Make sure the dev proxy or nginx forwards `/signin-oidc` to the gateway **with the original Host header** (`changeOrigin: false`, `proxy_set_header Host $http_host`), and clear cookies for `localhost`.
+The browser didn't send back the OIDC correlation cookie. Make sure the dev proxy or nginx forwards `/signin-oidc` to the gateway **with the browser's host**: the dev proxy keeps the original Host header (`changeOrigin: false`), nginx sends it as `X-Forwarded-Host`. Then clear cookies for `localhost`. Behind more than one proxy, set `Bff:PublicOrigin`.
 </details>
 
 <details>

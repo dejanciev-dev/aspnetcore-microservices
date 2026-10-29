@@ -464,7 +464,7 @@ Because OpenTelemetry propagates W3C trace context through the gateway, every `H
 | **Validation** | .NET 10 built-in Minimal API validation (`AddValidation()`) on DataAnnotations; failures return `400 ValidationProblem` automatically |
 | **Errors** | `AddProblemDetails()` + `UseExceptionHandler()` + `UseStatusCodePages()`: every error is RFC 9457 `application/problem+json` |
 | **API docs** | `AddOpenApi()` generates the document at `/openapi/v1.json`; Scalar renders it at `/scalar` |
-| **Health** | `/health` on every service and the gateway, used by Aspire `WithHttpHealthCheck` |
+| **Health** | `/health` runs every check (readiness), `/alive` none (liveness), on every service and the gateway; Aspire uses `/health`, Kubernetes and Container Apps use both, so a dependency outage removes pods from rotation instead of restarting them |
 | **Resilience** | `ConfigureHttpClientDefaults(h => h.AddStandardResilienceHandler())` |
 | **Logging** | `ILogger` with message templates; exported through OpenTelemetry |
 | **Tracing and metrics** | OpenTelemetry instrumentation for ASP.NET Core (excluding `/health`), HttpClient and the .NET runtime |
@@ -472,6 +472,7 @@ Because OpenTelemetry propagates W3C trace context through the gateway, every `H
 | **Rate limiting** | Gateway-wide token buckets per user / IP, stricter checkout and sign-in policies, `429` + `Retry-After` |
 | **Output caching** | Catalog reads cached at the gateway, shared across users, evicted on successful catalog writes |
 | **Container security** | Chiseled images: no shell, no package manager, non-root user |
+| **Deployment** | Kustomize manifests (kind in CI) and Azure Container Apps via `azd` + Bicep; see [deployment.md](deployment.md) |
 
 ## Design decisions
 
@@ -563,7 +564,7 @@ One origin means no CORS, a first-party session cookie, a single place for sign-
 | Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
-| End to end | Playwright (Chromium) against the Docker Compose stack | Real Keycloak sign-in and sign-out (including the SSO session), catalog filters in the URL, basket badge and totals, checkout validation, an order placed through RabbitMQ and polled until Ordering has it, an admin price change shown at once (cache eviction) and repricing an open basket via the outbox |
+| End to end | Playwright (Chromium) against the Docker Compose stack, and again against a kind cluster | Real Keycloak sign-in and sign-out (including the SSO session), catalog filters in the URL, basket badge and totals, checkout validation, an order placed through RabbitMQ and polled until Ordering has it, an admin price change shown at once (cache eviction) and repricing an open basket via the outbox |
 | Containers | GitHub Actions `docker compose build` | Every image builds from a clean checkout |
 
 ### Contract tests
@@ -588,7 +589,7 @@ These are intentional simplifications for a demo:
 
 - **Development secrets in the realm file.** The BFF client secret and demo passwords are committed for local use; production would inject them and drop the `storefront-tests` client.
 - **Rate-limit counters are per gateway instance** (in memory). With several replicas each enforces its own budget, so the effective limit multiplies. A distributed limiter (for example Redis-backed) or limits at the load balancer would fix this.
-- **`X-Forwarded-For` is trusted from any source** (the known-proxy lists are cleared for the demo), so a client that reaches the gateway directly could rotate IPs to dodge anonymous limits. In production, restrict `KnownProxies` / `KnownIPNetworks` to the real proxy.
+- **`X-Forwarded-For` is trusted from any source by default** (one hop, no known-proxy list), so a client that reaches the gateway directly could rotate IPs to dodge anonymous limits. Setting `ForwardedHeaders:KnownNetworks` to the proxies' range (as the Azure deployment does) trusts only them and unwinds a multi-proxy chain to the real client.
 - **Gateway session keys aren't shared.** ASP.NET Core data protection keys live in the container, so restarting or scaling the gateway signs users out. Persist them (Redis, a volume or a key vault) to fix this.
 - **Data is keyed by user name**, not the stable `sub` claim. Keycloak lets admins rename users, which would orphan their baskets and orders.
 - **Logout is a GET**, so a malicious page could sign a user out (logout CSRF). This is low impact, but a POST with an antiforgery token would remove it.

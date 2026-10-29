@@ -136,7 +136,7 @@ The app only ever calls **relative** URLs (`/api/...`):
 |---|---|---|
 | `npm start` | Angular dev server | [`proxy.conf.mjs`](../src/Web/storefront/proxy.conf.mjs), target `GATEWAY_URL` or `http://localhost:5100` |
 | Aspire | Angular dev server | AppHost sets `GATEWAY_URL` to the gateway endpoint |
-| Docker | nginx | [`nginx.conf`](../src/Web/storefront/nginx.conf), `proxy_pass http://api-gateway:8080` |
+| Containers | nginx | [`nginx.conf`](../src/Web/storefront/nginx.conf) template, `proxy_pass ${GATEWAY_URL}` (default `http://api-gateway:8080`) |
 
 Because it is always same-origin, there is no CORS setup and no environment-specific build.
 
