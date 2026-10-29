@@ -50,8 +50,13 @@ spec:
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            # Data Protection keys (session and OIDC correlation cookies). Per pod, like Compose; a
+            # shared store (Redis, a key vault) would survive restarts.
+            - { name: data-protection, mountPath: /home/app/.aspnet }
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: data-protection
           emptyDir: {}
 ---
 apiVersion: v1
