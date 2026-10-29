@@ -106,6 +106,26 @@ internal static class Bff
         });
 
     /// <summary>
+    /// With <c>Bff:PublicOrigin</c> set (e.g. https://shop.example.com), every request is treated as
+    /// arriving on that origin, so OIDC redirect URIs and Secure cookies don't depend on which
+    /// X-Forwarded-* headers a chain of proxies (Container Apps ingress → nginx → here) keeps.
+    /// Without it, the forwarded headers decide, as with Docker Compose and the dev proxy.
+    /// </summary>
+    public static IApplicationBuilder UsePublicOrigin(this IApplicationBuilder app)
+    {
+        var configured = app.ApplicationServices.GetRequiredService<IConfiguration>()["Bff:PublicOrigin"];
+        if (string.IsNullOrWhiteSpace(configured)) return app;
+
+        var origin = new Uri(configured, UriKind.Absolute);
+        return app.Use((context, next) =>
+        {
+            context.Request.Scheme = origin.Scheme;
+            context.Request.Host = HostString.FromUriComponent(origin.Authority);   // Authority omits default ports
+            return next(context);
+        });
+    }
+
+    /// <summary>
     /// CSRF protection for cookie-authenticated API calls: a custom header can't be added by a
     /// cross-site form or link, and cross-origin scripts would need a CORS preflight we never allow.
     /// </summary>

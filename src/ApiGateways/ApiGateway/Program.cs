@@ -17,6 +17,7 @@ builder.Services
 var app = builder.Build();
 
 app.UseForwardedHeaders();     // client IP for rate-limit partitions and redirect URIs
+app.UsePublicOrigin();         // optional fixed public origin (Bff:PublicOrigin)
 app.UseAuthentication();       // the user is known before rate limiting partitions by it
 app.UseRateLimiter();
 app.UseCsrfHeaderCheck();

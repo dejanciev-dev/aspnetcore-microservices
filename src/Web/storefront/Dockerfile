@@ -10,6 +10,8 @@ COPY . .
 RUN npx ng build --configuration production
 
 FROM nginx:1.29-alpine AS runtime
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# A template: the image renders it to conf.d/default.conf with envsubst when the container starts.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+ENV GATEWAY_URL=http://api-gateway:8080
 COPY --from=build /app/dist/storefront/browser /usr/share/nginx/html
 EXPOSE 80
