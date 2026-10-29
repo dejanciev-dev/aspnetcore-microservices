@@ -62,7 +62,7 @@ internal static class Bff
                 if (identity["MetadataAddress"] is { Length: > 0 } metadata) options.MetadataAddress = metadata;
                 options.ClientId = identity["ClientId"];
                 options.ClientSecret = identity["ClientSecret"];
-                options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+                options.RequireHttpsMetadata = identity.GetValue("RequireHttpsMetadata", !builder.Environment.IsDevelopment());
 
                 options.ResponseType = "code";
                 options.UsePkce = true;

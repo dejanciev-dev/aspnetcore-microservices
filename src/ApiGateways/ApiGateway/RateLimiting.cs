@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
+using BuildingBlocks.Common;
 using Microsoft.AspNetCore.RateLimiting;
 
 namespace ApiGateway;
@@ -31,7 +32,7 @@ internal static class RateLimiting
 
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
             {
-                if (context.Request.Path.StartsWithSegments("/health"))
+                if (ServiceDefaults.IsHealthProbe(context.Request.Path))
                     return RateLimitPartition.GetNoLimiter("health");
 
                 var key = PartitionKey(context);

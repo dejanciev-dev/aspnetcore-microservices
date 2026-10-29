@@ -22,7 +22,7 @@ app.UseRateLimiter();
 app.UseCsrfHeaderCheck();
 app.UseOutputCache();          // after rate limiting and the CSRF check, so cache hits still pass both
 
-app.MapHealthChecks("/health");
+app.MapHealthEndpoints();
 app.MapBffEndpoints();
 app.MapReverseProxy();
 

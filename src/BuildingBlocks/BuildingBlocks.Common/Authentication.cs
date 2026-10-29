@@ -35,7 +35,7 @@ public static class Authentication
                 options.Authority = identity["Authority"];
                 if (identity["MetadataAddress"] is { Length: > 0 } metadata) options.MetadataAddress = metadata;
                 options.Audience = ApiAudience;
-                options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+                options.RequireHttpsMetadata = identity.GetValue("RequireHttpsMetadata", !builder.Environment.IsDevelopment());
                 options.MapInboundClaims = false;   // keep the JWT claim names (sub, preferred_username, ...)
                 options.TokenValidationParameters.NameClaimType = "preferred_username";
                 options.TokenValidationParameters.RoleClaimType = "role";

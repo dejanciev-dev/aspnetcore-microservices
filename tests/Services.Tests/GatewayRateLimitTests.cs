@@ -66,7 +66,10 @@ public sealed class GatewayRateLimitTests
         var client = gateway.CreateClient();
 
         for (var i = 0; i < 6; i++)
+        {
             Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(From("203.0.113.30", HttpMethod.Get, "/health"), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(From("203.0.113.30", HttpMethod.Get, "/alive"), Ct)).StatusCode);
+        }
     }
 
     [Fact]

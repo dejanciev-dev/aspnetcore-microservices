@@ -1,4 +1,7 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -51,7 +54,7 @@ public static class ServiceDefaults
             .WithTracing(tracing => tracing
                 .AddSource(builder.Environment.ApplicationName)
                 .AddSource("BuildingBlocks.Messaging")   // RabbitMQ publish/process spans
-                .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !ctx.Request.Path.StartsWithSegments("/health"))
+                .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !IsHealthProbe(ctx.Request.Path))
                 .AddHttpClientInstrumentation());
 
         if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
@@ -69,8 +72,24 @@ public static class ServiceDefaults
 
         app.MapOpenApi();
         app.MapScalarApiReference();
-        app.MapHealthChecks("/health");
+        app.MapHealthEndpoints();
 
         return app;
     }
+
+    /// <summary>
+    /// <c>/health</c> runs every registered check (database, Redis, RabbitMQ): "ready for traffic".
+    /// <c>/alive</c> runs none: "the process responds". Kubernetes uses /alive for liveness, so an
+    /// outage of a dependency takes pods out of rotation instead of restarting them in a loop.
+    /// </summary>
+    public static IEndpointRouteBuilder MapHealthEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.MapHealthChecks("/health");
+        app.MapHealthChecks("/alive", new HealthCheckOptions { Predicate = _ => false });
+        return app;
+    }
+
+    /// <summary>Probe traffic is excluded from traces and rate limits.</summary>
+    public static bool IsHealthProbe(PathString path) =>
+        path.StartsWithSegments("/health") || path.StartsWithSegments("/alive");
 }
