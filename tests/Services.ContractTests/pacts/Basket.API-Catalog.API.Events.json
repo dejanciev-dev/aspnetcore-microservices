@@ -1,0 +1,78 @@
+{
+  "consumer": {
+    "name": "Basket.API"
+  },
+  "messages": [
+    {
+      "contents": {
+        "id": "0d9e4c1a-8b7f-4f3e-9a51-6c2d8e7f1b20",
+        "newPrice": 79.99,
+        "occurredAt": "2026-10-29T10:15:30.1234567+00:00",
+        "oldPrice": 89.99,
+        "productId": "6f1c0a52-3c7e-4a8e-9d0b-2b6f6d1f4a11"
+      },
+      "description": "catalog.product-price-changed",
+      "matchingRules": {
+        "body": {
+          "$.id": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            ]
+          },
+          "$.newPrice": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "number"
+              }
+            ]
+          },
+          "$.occurredAt": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          },
+          "$.oldPrice": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "number"
+              }
+            ]
+          },
+          "$.productId": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "regex",
+                "regex": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "contentType": "application/json"
+      }
+    }
+  ],
+  "metadata": {
+    "pactRust": {
+      "ffi": "0.4.27",
+      "models": "1.2.8"
+    },
+    "pactSpecification": {
+      "version": "3.0.0"
+    }
+  },
+  "provider": {
+    "name": "Catalog.API.Events"
+  }
+}

@@ -28,6 +28,15 @@ jobs:
           dotnet test --solution aspnetcore-microservices.slnx -c Release --no-build
           --report-trx --coverage --coverage-output-format cobertura
           --results-directory TestResults
+      # Consumer contract tests rewrite the pact files that the provider tests verify. Any change
+      # here means a contract moved without the new pact being committed (and reviewed).
+      - name: Check pact files are committed
+        run: |
+          if [ -n "$(git status --porcelain -- tests/Services.ContractTests/pacts)" ]; then
+            git --no-pager diff -- tests/Services.ContractTests/pacts
+            echo "::error title=Pact files out of date::Run the contract tests locally and commit tests/Services.ContractTests/pacts."
+            exit 1
+          fi
       - name: Report failed tests as annotations
         if: failure()
         run: |

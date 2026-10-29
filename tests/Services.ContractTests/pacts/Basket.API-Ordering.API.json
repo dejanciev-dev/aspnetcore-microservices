@@ -1,0 +1,107 @@
+{
+  "consumer": {
+    "name": "Basket.API"
+  },
+  "interactions": [
+    {
+      "description": "a request to create an order",
+      "pending": false,
+      "request": {
+        "body": {
+          "content": {
+            "items": [
+              {
+                "productId": "6f1c0a52-3c7e-4a8e-9d0b-2b6f6d1f4a11",
+                "productName": "Mechanical keyboard",
+                "quantity": 2,
+                "unitPrice": 89.99
+              }
+            ],
+            "shippingAddress": {
+              "city": "London",
+              "country": "UK",
+              "fullName": "Ada Lovelace",
+              "street": "12 Analytical St",
+              "zipCode": "N1 9GU"
+            }
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Authorization": [
+            "Bearer token-of-the-signed-in-user"
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer .+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/api/orders"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "total": 179.98
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                }
+              ]
+            },
+            "$.total": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pactRust": {
+      "ffi": "0.4.27",
+      "models": "1.2.8"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "Ordering.API"
+  }
+}

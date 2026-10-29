@@ -1,0 +1,102 @@
+{
+  "consumer": {
+    "name": "Basket.API"
+  },
+  "interactions": [
+    {
+      "description": "a request for a product",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a product exists",
+          "params": {
+            "id": "6f1c0a52-3c7e-4a8e-9d0b-2b6f6d1f4a11"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/api/products/6f1c0a52-3c7e-4a8e-9d0b-2b6f6d1f4a11"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "id": "6f1c0a52-3c7e-4a8e-9d0b-2b6f6d1f4a11",
+            "imageUrl": "https://example.com/keyboard.png",
+            "name": "Mechanical keyboard",
+            "price": 89.99
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.imageUrl": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.price": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for a product that does not exist",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "no product exists",
+          "params": {
+            "id": "00000000-0000-4000-8000-000000000404"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/api/products/00000000-0000-4000-8000-000000000404"
+      },
+      "response": {
+        "status": 404
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pactRust": {
+      "ffi": "0.4.27",
+      "models": "1.2.8"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "Catalog.API"
+  }
+}
