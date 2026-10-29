@@ -9,6 +9,7 @@ WORKDIR /repo
 # Restore first so this layer stays cached until a project file changes.
 COPY src/BuildingBlocks/BuildingBlocks.Common/BuildingBlocks.Common.csproj src/BuildingBlocks/BuildingBlocks.Common/
 COPY src/BuildingBlocks/BuildingBlocks.Messaging/BuildingBlocks.Messaging.csproj src/BuildingBlocks/BuildingBlocks.Messaging/
+COPY src/BuildingBlocks/BuildingBlocks.Persistence/BuildingBlocks.Persistence.csproj src/BuildingBlocks/BuildingBlocks.Persistence/
 COPY src/Services/Catalog/Catalog.API/Catalog.API.csproj    src/Services/Catalog/Catalog.API/
 COPY src/Services/Basket/Basket.API/Basket.API.csproj       src/Services/Basket/Basket.API/
 COPY src/Services/Ordering/Ordering.API/Ordering.API.csproj src/Services/Ordering/Ordering.API/

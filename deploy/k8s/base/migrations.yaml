@@ -1,0 +1,87 @@
+# Schema migrations (and the catalog seed) run once per deployment, here, instead of in every
+# replica at startup. The service pods set Database__MigrateOnStartup=false and stay unready
+# (their /health includes a pending-migrations check) until the job has finished.
+#
+# Jobs are immutable, so finished ones delete themselves; the next `kubectl apply` recreates them,
+# and migrating an up-to-date database is a no-op.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: catalog-migrate
+spec:
+  backoffLimit: 10                # PostgreSQL may still be starting
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: catalog-migrate }
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: catalog-api
+          args: [migrate]
+          envFrom:
+            - configMapRef: { name: service-config }
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: storefront-secrets, key: postgres-password } }
+            - name: ConnectionStrings__catalogdb
+              value: Host=postgres;Database=catalogdb;Username=postgres;Password=$(POSTGRES_PASSWORD)
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ordering-migrate
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ordering-migrate }
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: ordering-api
+          args: [migrate]
+          envFrom:
+            - configMapRef: { name: service-config }
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: storefront-secrets, key: postgres-password } }
+            - name: ConnectionStrings__orderingdb
+              value: Host=postgres;Database=orderingdb;Username=postgres;Password=$(POSTGRES_PASSWORD)
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

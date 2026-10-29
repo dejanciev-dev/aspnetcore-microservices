@@ -1,5 +1,6 @@
 using BuildingBlocks.Common;
 using BuildingBlocks.Messaging;
+using BuildingBlocks.Persistence;
 using Catalog.API.Data;
 using Catalog.API.Endpoints;
 using Microsoft.EntityFrameworkCore;
@@ -17,6 +18,7 @@ if (usePostgres)
     builder.AddNpgsqlDbContext<CatalogDbContext>(CatalogDbContext.ConnectionName, configureDbContextOptions: options =>
         options.UseAsyncSeeding((db, _, ct) => CatalogDbContext.SeedAsync(db, ct)));
     builder.Services.AddScoped<IProductRepository, EfProductRepository>();
+    builder.Services.AddHealthChecks().AddPendingMigrationsCheck<CatalogDbContext>();
 }
 else
 {
@@ -32,12 +34,9 @@ if (builder.AddRabbitMqMessaging(queuePrefix: "catalog-api") && usePostgres)
 
 var app = builder.Build();
 
-if (usePostgres)
-{
-    // Demo convenience: apply migrations (and seed) at startup. In production run them as a deployment step.
-    await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<CatalogDbContext>().Database.MigrateAsync();
-}
+// Migrations (and the seed) at startup by default; `migrate` applies them and exits (a Kubernetes
+// Job), and Database:MigrateOnStartup=false leaves them to that job when there are several replicas.
+if (usePostgres && await app.ApplyMigrationsAsync<CatalogDbContext>(args)) return;
 
 app.MapDefaultEndpoints();
 app.MapProductEndpoints();

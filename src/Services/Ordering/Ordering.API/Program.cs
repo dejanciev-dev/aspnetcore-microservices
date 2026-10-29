@@ -1,6 +1,6 @@
 using BuildingBlocks.Common;
 using BuildingBlocks.Messaging;
-using Microsoft.EntityFrameworkCore;
+using BuildingBlocks.Persistence;
 using Ordering.API.Data;
 using Ordering.API.Endpoints;
 using Ordering.API.Events;
@@ -18,6 +18,7 @@ if (usePostgres)
     // Aspire integration: pooled DbContext, retries, health check and OpenTelemetry tracing.
     builder.AddNpgsqlDbContext<OrderingDbContext>(OrderingDbContext.ConnectionName);
     builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
+    builder.Services.AddHealthChecks().AddPendingMigrationsCheck<OrderingDbContext>();
 }
 else
 {
@@ -32,12 +33,9 @@ if (builder.AddRabbitMqMessaging(queuePrefix: "ordering-api"))
 
 var app = builder.Build();
 
-if (usePostgres)
-{
-    // Demo convenience: apply migrations at startup. In production run them as a deployment step.
-    await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<OrderingDbContext>().Database.MigrateAsync();
-}
+// Migrations at startup by default; `migrate` applies them and exits (a Kubernetes Job), and
+// Database:MigrateOnStartup=false leaves them to that job when there are several replicas.
+if (usePostgres && await app.ApplyMigrationsAsync<OrderingDbContext>(args)) return;
 
 app.MapDefaultEndpoints();
 app.MapOrderEndpoints();

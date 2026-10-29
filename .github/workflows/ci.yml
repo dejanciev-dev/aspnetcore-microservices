@@ -165,6 +165,7 @@ jobs:
         run: |
           kubectl apply -k deploy/k8s/overlays/kind
           for s in postgres redis rabbitmq; do kubectl -n storefront rollout status "statefulset/$s" --timeout=5m; done
+          kubectl -n storefront wait job/catalog-migrate job/ordering-migrate --for=condition=Complete --timeout=5m
           kubectl -n storefront wait deployment --all --for=condition=Available --timeout=10m
           kubectl -n storefront get pods -o wide
       # The same browser suite as against Docker Compose: the cluster serves the same URLs.

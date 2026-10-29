@@ -20,6 +20,7 @@ resources:
   - rabbitmq.yaml
   - keycloak.yaml
   - aspire-dashboard.yaml
+  - migrations.yaml        # catalog and ordering schema, once per deployment
   - catalog-api.yaml
   - basket-api.yaml
   - ordering-api.yaml
