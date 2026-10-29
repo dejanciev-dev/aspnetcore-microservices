@@ -89,6 +89,7 @@ services:
       <<: *common-env
       OTEL_SERVICE_NAME: api-gateway
       Identity__ClientSecret: ${KEYCLOAK_CLIENT_SECRET:-storefront-bff-dev-secret}
+      ConnectionStrings__redis: redis:6379   # shared Data Protection keys and output cache
       ReverseProxy__Clusters__catalog__Destinations__d1__Address: http://catalog-api:8080
       ReverseProxy__Clusters__basket__Destinations__d1__Address: http://basket-api:8080
       ReverseProxy__Clusters__ordering__Destinations__d1__Address: http://ordering-api:8080
@@ -96,6 +97,7 @@ services:
       - "5100:8080"
     depends_on:
       keycloak: { condition: service_healthy }
+      redis: { condition: service_healthy }
       catalog-api: { condition: service_started }
       basket-api: { condition: service_started }
       ordering-api: { condition: service_started }

@@ -6,6 +6,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.ConfigureOpenTelemetry();
 builder.Services.AddHealthChecks();
 builder.AddBff();
+builder.AddSharedState();        // before output caching: Redis replaces the in-memory cache store
 builder.AddGatewayRateLimiting();
 builder.AddGatewayOutputCaching();
 builder.Services

@@ -349,10 +349,11 @@ module apiGateway 'modules/container-app.bicep' = {
     azdServiceName: 'api-gateway'
     exists: apiGatewayExists
     targetPort: 8080
-    maxReplicas: 1   // session keys, output cache and rate-limit counters are per instance
+    maxReplicas: 3   // keys and output cache are shared through Redis; rate limits are per replica
     secrets: { items: [{ name: 'bff-client-secret', value: bffClientSecret }] }
     env: concat(commonServiceEnv, [
       { name: 'Identity__ClientSecret', secretRef: 'bff-client-secret' }
+      { name: 'ConnectionStrings__redis', value: 'redis:6379' }   // shared Data Protection keys and output cache
       // Redirect URIs and Secure cookies from the public URL, whatever the proxies forward.
       { name: 'Bff__PublicOrigin', value: storefrontUrl }
       // Unwind X-Forwarded-For through the environment's own proxies to the real client.

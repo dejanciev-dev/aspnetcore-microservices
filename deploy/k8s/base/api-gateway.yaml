@@ -3,9 +3,9 @@ kind: Deployment
 metadata:
   name: api-gateway
 spec:
-  # One replica: session-cookie keys, the output cache and rate-limit counters are per instance
-  # (see docs/architecture.md, Known limitations).
-  replicas: 1
+  # Replicas share Data Protection keys and the output cache through Redis, so a sign-in or a
+  # cache eviction works whichever pod serves it. Rate-limit counters stay per pod.
+  replicas: 2
   selector:
     matchLabels: { app.kubernetes.io/name: api-gateway }
   template:
@@ -26,6 +26,7 @@ spec:
             - configMapRef: { name: service-config }
           env:
             - { name: OTEL_SERVICE_NAME, value: api-gateway }
+            - { name: ConnectionStrings__redis, value: "redis:6379" }
             - name: Identity__ClientSecret
               valueFrom: { secretKeyRef: { name: storefront-secrets, key: keycloak-client-secret } }
             - { name: ReverseProxy__Clusters__catalog__Destinations__d1__Address, value: "http://catalog-api:8080" }
@@ -50,13 +51,8 @@ spec:
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
-            # Data Protection keys (session and OIDC correlation cookies). Per pod, like Compose; a
-            # shared store (Redis, a key vault) would survive restarts.
-            - { name: data-protection, mountPath: /home/app/.aspnet }
       volumes:
         - name: tmp
-          emptyDir: {}
-        - name: data-protection
           emptyDir: {}
 ---
 apiVersion: v1

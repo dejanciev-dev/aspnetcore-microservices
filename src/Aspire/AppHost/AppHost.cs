@@ -65,6 +65,8 @@ var basket = builder.AddProject<Projects.Basket_API>("basket-api")
 
 // The gateway is the BFF: it signs users in with Keycloak and relays their access tokens.
 var gateway = builder.AddProject<Projects.ApiGateway>("api-gateway")
+    .WithReference(redis)            // shared Data Protection keys and output cache
+    .WaitFor(redis)
     .WithEnvironment("Identity__Authority", authority)
     .WaitFor(keycloak)
     .WithEnvironment("ReverseProxy__Clusters__catalog__Destinations__d1__Address", catalog.GetEndpoint("http"))
