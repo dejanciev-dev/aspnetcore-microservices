@@ -31,7 +31,8 @@ export const test = base.extend({
 
 /** Completes Keycloak's login form, which the gateway's /bff/login redirected to. */
 export async function signInAtKeycloak(page: Page, user: User): Promise<void> {
-  await expect(page).toHaveURL(/\/realms\/storefront\/protocol\/openid-connect\//);
+  // The form lives under /realms/storefront/login-actions/… once Keycloak has taken the request.
+  await expect(page).toHaveURL(/\/realms\/storefront\//);
   await page.locator('#username').fill(user.username);
   await page.locator('#password').fill(user.password);
   await page.locator('#kc-login').click();
