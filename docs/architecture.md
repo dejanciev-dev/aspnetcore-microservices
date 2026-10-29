@@ -166,7 +166,7 @@ The Aspire client integrations (`Aspire.Npgsql.EntityFrameworkCore.PostgreSQL`, 
 ### Schema and migrations
 
 - The schema is defined in `OnModelCreating` (lengths, `numeric(18,2)` precision, indexes) and versioned as **EF Core migrations** in `Data/Migrations/`.
-- Services apply pending migrations at startup with `Database.MigrateAsync()`. That is convenient for a demo; in production you would run them as a deployment step (`dotnet ef database update`, a migration bundle or an Aspire/Kubernetes job) so several replicas never race.
+- **When migrations run** ([`BuildingBlocks.Persistence`](../src/BuildingBlocks/BuildingBlocks.Persistence/Migrations.cs)): at startup by default, which suits one instance (`dotnet run`, Aspire, Compose). Started with the `migrate` argument, a service applies them (and Catalog's seed) and exits; on Kubernetes a Job does that once per deployment. Replicas then run with `Database:MigrateOnStartup=false`, and a pending-migrations readiness check keeps them out of rotation until the schema is current, so several replicas never race.
 - An `IDesignTimeDbContextFactory` lets `dotnet ef` build each context without starting the app or reaching a database.
 
 ### Ordering's persistence model
@@ -382,7 +382,8 @@ Catalog reads are the hottest, least personal traffic, so the gateway answers re
 - **Stampede protection:** concurrent misses for the same key wait for one downstream call instead of all hitting Catalog.
 - **Invalidation:** the policy tags its entries with its own name. A YARP response transform evicts that tag after a successful `POST`/`PUT`/`PATCH`/`DELETE` through the same route, before the response returns, so an admin sees their change on the next read. Rejected writes (`4xx`/`5xx`) keep the cache.
 - **Where it sits:** after the rate limiter and the CSRF check, so cache hits still count against a caller's budget and still need `X-CSRF`.
-- **Limits:** the cache is in memory per gateway instance. Changes that bypass the gateway, or reach a different replica, show up when entries expire. Running several replicas would call for a shared store such as Redis (`AddStackExchangeRedisOutputCache`), which makes eviction cluster-wide.
+- **Shared across replicas:** with `ConnectionStrings:redis` set, entries and tags live in Redis, so a write through any gateway replica evicts the cached reads of all of them ([`SharedState.cs`](../src/ApiGateways/ApiGateway/SharedState.cs)). Without Redis the cache is in memory, which suits a single instance.
+- **Limits:** changes that bypass the gateway (a direct database edit, a call to Catalog on its own port) show up when entries expire.
 - **Tuning:** `OutputCaching__CatalogSeconds=300`. Cached responses carry an `Age` header.
 
 ### Keycloak realm
@@ -561,6 +562,7 @@ One origin means no CORS, a first-party session cookie, a single place for sign-
 | Real tokens | Testcontainers (Keycloak 26 with the project realm) | Signature, issuer and audience validation, realm-role mapping (admin vs customer), tampered tokens rejected |
 | BFF sign-in (end to end) | Keycloak container + the real gateway + an echo backend | `/bff/login` → Keycloak login form → `/signin-oidc` → HttpOnly session → `/bff/user` roles → access token relayed with the right audience → logout ends the SSO session |
 | Service contracts | PactNet 5: consumer tests against Pact mocks, provider verification on Kestrel | Basket's real `CatalogClient`, `OrderingClient` (with token relay) and price-change handler, Ordering's checkout handler; the real Catalog, Ordering and Basket honour every committed pact (see [Contract tests](#contract-tests)) |
+| Scale-out | Two gateway instances on real Redis and Keycloak; a Catalog instance on a fresh PostgreSQL database | A sign-in started on one gateway completes on the other (keys in Redis); a write through one evicts reads cached through the other; with startup migration off a replica is alive but not ready until migrations (and the seed) have run |
 | Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
@@ -588,12 +590,10 @@ Services share no contract assemblies: each declares its own copy of the DTOs an
 These are intentional simplifications for a demo:
 
 - **Development secrets in the realm file.** The BFF client secret and demo passwords are committed for local use; production would inject them and drop the `storefront-tests` client.
-- **Rate-limit counters are per gateway instance** (in memory). With several replicas each enforces its own budget, so the effective limit multiplies. A distributed limiter (for example Redis-backed) or limits at the load balancer would fix this.
+- **Rate-limit counters are per gateway instance** (in memory). With several replicas each enforces its own budget, so the effective limit is the configured one times the replica count. A distributed limiter (for example Redis-backed) or limits at the load balancer would make it exact.
 - **`X-Forwarded-For` is trusted from any source by default** (one hop, no known-proxy list), so a client that reaches the gateway directly could rotate IPs to dodge anonymous limits. Setting `ForwardedHeaders:KnownNetworks` to the proxies' range (as the Azure deployment does) trusts only them and unwinds a multi-proxy chain to the real client.
-- **Gateway session keys aren't shared.** ASP.NET Core data protection keys live in the container, so restarting or scaling the gateway signs users out. Persist them (Redis, a volume or a key vault) to fix this.
 - **Data is keyed by user name**, not the stable `sub` claim. Keycloak lets admins rename users, which would orphan their baskets and orders.
 - **Logout is a GET**, so a malicious page could sign a user out (logout CSRF). This is low impact, but a POST with an antiforgery token would remove it.
-- **Migrations run at startup.** That is fine for one replica; with several, run migrations as a separate deployment step.
 - **Basket updates are last-write-wins.** Two simultaneous "add item" requests for the same user can overwrite each other. Redis transactions (`WATCH`/`MULTI`) or a hash per basket would fix this.
 - **In-memory fallback** (when no connection string is set) loses data on restart and must not be scaled out.
 - **Basket publish-then-delete isn't atomic.** If Basket crashes after the broker confirms but before the cart is deleted, the order is still created; the cart just stays around until the user clears it.

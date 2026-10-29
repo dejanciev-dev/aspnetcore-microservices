@@ -36,6 +36,7 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 - **Output caching at the edge**: catalog reads are served by the gateway and evicted when an admin changes a product
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
+- **Ready to scale out**: gateway replicas share sign-in keys and the output cache through Redis, and migrations run once per deployment (a Kubernetes Job) with readiness waiting for the schema
 - **Five ways to run it**: plain `dotnet run`, .NET Aspire, Docker Compose, Kubernetes (Kustomize, verified on kind in CI) or Azure Container Apps (`azd up`)
 - **A modern Angular front end** that is zoneless, signal-based and uses `httpResource` and Signal Forms
 - **Automated quality gates**: integration tests, component tests and GitHub Actions CI
@@ -305,7 +306,7 @@ The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Ang
 ## 🧪 Testing
 
 ```bash
-dotnet test                                          # 31 API + 9 contract + 18 container-backed tests (xUnit v3)
+dotnet test                                          # 36 API + 9 contract + 21 container-backed tests (xUnit v3)
 cd src/Web/storefront && npx ng test --watch=false   # 17 unit/component tests (Vitest)
 cd tests/e2e && npm ci && npx playwright test        # 13 browser tests + 2 sign-in setups (Playwright)
 ```

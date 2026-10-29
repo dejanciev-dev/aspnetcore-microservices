@@ -30,9 +30,10 @@ The **base** is shaped for a real cluster: `ASPNETCORE_ENVIRONMENT=Production`, 
 
 | Workload | Kind | Replicas | Probes |
 |---|---|---|---|
-| catalog-api, ordering-api | Deployment | 1 (migrations run at startup) | startup and liveness `/alive`, readiness `/health` |
+| catalog-migrate, ordering-migrate | Job | once per apply | – |
+| catalog-api, ordering-api | Deployment | 2 (the Jobs own the schema) | startup and liveness `/alive`, readiness `/health` (includes "schema up to date") |
 | basket-api | Deployment | 2 (stateless) | same |
-| api-gateway | Deployment | 1 (session keys, output cache and rate limits are per instance) | same |
+| api-gateway | Deployment | 2 (Data Protection keys and output cache shared through Redis) | same |
 | storefront | Deployment | 2 | `GET /` |
 | postgres, redis, rabbitmq | StatefulSet with a volume | 1 | `pg_isready`, `redis-cli ping`, `rabbitmq-diagnostics ping` |
 | keycloak | Deployment | 1 | `/health/started`, `/health/live`, `/health/ready` on port 9000 |
@@ -40,7 +41,12 @@ The **base** is shaped for a real cluster: `ASPNETCORE_ENVIRONMENT=Production`, 
 
 **Liveness vs readiness.** `/health` runs every registered check (PostgreSQL, Redis, RabbitMQ). `/alive` runs none. If liveness used `/health`, a database outage would make Kubernetes restart every healthy pod in a loop. With `/alive` for liveness, the pods only leave the Service's endpoints until the dependency is back.
 
-**Hardening.** The .NET pods run as the chiseled image's non-root user (uid 1654) with a read-only root filesystem (an `emptyDir` on `/tmp`, plus one for the gateway's Data Protection keys, which sign its session and OIDC correlation cookies), no privilege escalation, all capabilities dropped, the `RuntimeDefault` seccomp profile, and no service-account token. They meet the *restricted* Pod Security Standard. The namespace enforces *baseline*, because the stock postgres, redis, rabbitmq and nginx images start as root.
+**Hardening.** The .NET pods run as the chiseled image's non-root user (uid 1654) with a read-only root filesystem (an `emptyDir` on `/tmp`; the gateway keeps its Data Protection keys in Redis), no privilege escalation, all capabilities dropped, the `RuntimeDefault` seccomp profile, and no service-account token. They meet the *restricted* Pod Security Standard. The namespace enforces *baseline*, because the stock postgres, redis, rabbitmq and nginx images start as root.
+
+**Scaling out.** Every application workload runs two replicas, and the E2E suite runs against them through the Services' load balancing:
+
+- **Gateway:** the Data Protection key ring (which encrypts the session cookie and the OIDC correlation and nonce cookies) and the output cache live in Redis. A sign-in can start on one pod and finish on another, and a catalog write evicts every pod's cached reads. Rate-limit counters stay per pod, so the effective limit is the configured one times the replica count.
+- **Catalog and Ordering:** the `catalog-migrate` and `ordering-migrate` Jobs run the service images with the `migrate` argument (migrations, plus Catalog's seed). The Deployments set `Database__MigrateOnStartup=false`, and their readiness waits for the schema. Jobs are immutable, so finished ones delete themselves after ten minutes (`ttlSecondsAfterFinished`). The next `kubectl apply` recreates them, and migrating an up-to-date database is a no-op.
 
 **Configuration.** A generated `service-config` ConfigMap holds what every .NET service shares. Connection strings are assembled from `Secret` keys with Kubernetes' `$(VAR)` expansion, so no password is written into a manifest.
 
@@ -120,7 +126,8 @@ Running behind a TLS-terminating proxy that routes internal traffic by `Host` ne
 
 - **Not deployed by CI.** CI compiles and lints the Bicep and validates `azure.yaml` against the azd schema on every push, but nothing deploys the templates automatically. Treat the first `azd up` as the real test.
 - **Probes start on the second provision.** Before the first `azd deploy`, each app runs a placeholder image on the same port (the ASP.NET sample, or hello-world for nginx) without probes, so the first revision is healthy. Once real images exist, the next `azd provision` / `azd up` keeps them and adds the probes.
-- **Redis and RabbitMQ are not durable.** They have no volumes here: a restart loses open baskets and unconsumed messages (orders already written to PostgreSQL are safe). Azure Managed Redis and Azure Service Bus are the production choices; the latter would need a different messaging transport.
+- **Redis and RabbitMQ are not durable.** They have no volumes here: a restart loses open baskets and unconsumed messages (orders already written to PostgreSQL are safe), and the gateway's Data Protection keys, which signs everyone out. Azure Managed Redis and Azure Service Bus are the production choices; the latter would need a different messaging transport.
 - **No telemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` isn't set, so only console logs reach Log Analytics. Pointing it at an OpenTelemetry collector or Application Insights is a follow-up.
 - **Demo identities are public.** The realm's demo users (`ada` / `ada` with the admin role, `grace` / `grace`), the `storefront-tests` password-grant client and the localhost redirect URIs come along. Change or remove them in the Keycloak admin console, or keep the deployment private.
+- **Catalog and Ordering stay at one replica.** They still migrate at startup here; a Container Apps job running `migrate` (the Kubernetes setup's approach) would lift that. The gateway already scales to three replicas.
 - **Costs.** PostgreSQL B1ms, the registry and the always-on replicas (min 1 per app) incur charges while the environment exists.

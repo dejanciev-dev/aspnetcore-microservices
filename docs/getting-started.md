@@ -140,7 +140,8 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 | `ForwardedHeaders:KnownNetworks` | gateway | *(unset: trust one hop from anywhere)* | CIDRs of trusted proxies; the gateway then unwinds the whole `X-Forwarded-For` chain to the real client |
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
-| `ConnectionStrings:redis` | Basket.API | *(unset → in-memory)* | StackExchange.Redis configuration string, e.g. `localhost:6379` |
+| `ConnectionStrings:redis` | Basket.API, gateway | *(unset → in-memory)* | StackExchange.Redis configuration string, e.g. `localhost:6379`. Baskets; for the gateway, Data Protection keys and the output cache shared by its replicas |
+| `Database:MigrateOnStartup` | Catalog.API, Ordering.API | `true` | `false` leaves migrations to a separate run with the `migrate` argument (a Kubernetes Job); readiness waits for the schema |
 | `ConnectionStrings:rabbitmq` | Catalog, Basket, Ordering | *(unset → no messaging, HTTP checkout)* | AMQP URI, e.g. `amqp://user:pass@localhost:5672` |
 | `Services:Catalog` | Basket.API | `http://localhost:5101` | Base URL for product and price lookups |
 | `Services:Ordering` | Basket.API | `http://localhost:5103` | Base URL used to create orders on checkout |
@@ -203,7 +204,7 @@ To watch messaging in action: change a product's price (`PUT /api/products/{id}`
 The test projects use **xUnit v3** on **Microsoft.Testing.Platform** (opted in via `global.json`).
 
 ```bash
-# everything: 31 API tests + 9 contract tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
+# everything: 36 API tests + 9 contract tests + 21 PostgreSQL/Redis/RabbitMQ/Keycloak tests
 dotnet test
 
 # with TRX reports and Cobertura coverage
@@ -214,7 +215,7 @@ cd src/Web/storefront
 npx ng test --watch=false
 ```
 
-`tests/Services.IntegrationTests` starts PostgreSQL, Redis, RabbitMQ and Keycloak with **Testcontainers**, so it needs Docker. Without Docker the 18 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
+`tests/Services.IntegrationTests` starts PostgreSQL, Redis, RabbitMQ and Keycloak with **Testcontainers**, so it needs Docker. Without Docker the 21 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
 
 ### End-to-end tests (Playwright)
 
