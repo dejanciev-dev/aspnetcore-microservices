@@ -29,7 +29,7 @@ internal sealed class RabbitMqConsumer(
     ILogger<RabbitMqConsumer> logger) : BackgroundService
 {
     private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3)];
-    private readonly List<IChannel> _channels = [];
+    private List<IChannel> _channels = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -114,6 +114,12 @@ internal sealed class RabbitMqConsumer(
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         await base.StopAsync(cancellationToken);
-        foreach (var channel in _channels) await channel.DisposeAsync();
+        // StopAsync can run twice (the test host and the app both stop on shutdown), so only the first
+        // call takes the channels. If the connection is already disposed, its channels went with it.
+        foreach (var channel in Interlocked.Exchange(ref _channels, []))
+        {
+            try { await channel.DisposeAsync(); }
+            catch (ObjectDisposedException) { }
+        }
     }
 }
