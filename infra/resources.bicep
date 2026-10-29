@@ -9,6 +9,9 @@
 
 param location string
 param tags object
+@description('uniqueString() of the subscription, group and environment: 13 lowercase characters.')
+@minLength(13)
+@maxLength(13)
 param resourceToken string
 
 @secure()
@@ -167,19 +170,15 @@ var commonServiceEnv = [
   { name: 'Identity__Authority', value: authority }
 ]
 
-var appDefaults = {
-  location: location
-  tags: tags
-  environmentId: environment.id
-  identityId: identity.id
-  registryServer: registry.properties.loginServer
-}
-
 module redis 'modules/container-app.bicep' = {
   name: 'redis'
   dependsOn: [acrPull]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'redis'
     image: 'docker.io/library/redis:8-alpine'
     targetPort: 6379
@@ -194,7 +193,11 @@ module rabbitmq 'modules/container-app.bicep' = {
   name: 'rabbitmq'
   dependsOn: [acrPull]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'rabbitmq'
     image: 'docker.io/library/rabbitmq:4-alpine'
     targetPort: 5672
@@ -212,7 +215,11 @@ module keycloak 'modules/container-app.bicep' = {
   name: 'keycloak'
   dependsOn: [acrPull, databases]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'keycloak'
     azdServiceName: 'keycloak'
     exists: keycloakExists
@@ -252,7 +259,11 @@ module catalogApi 'modules/container-app.bicep' = {
   name: 'catalog-api'
   dependsOn: [acrPull, databases]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'catalog-api'
     azdServiceName: 'catalog-api'
     exists: catalogApiExists
@@ -276,7 +287,11 @@ module orderingApi 'modules/container-app.bicep' = {
   name: 'ordering-api'
   dependsOn: [acrPull, databases]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'ordering-api'
     azdServiceName: 'ordering-api'
     exists: orderingApiExists
@@ -300,7 +315,11 @@ module basketApi 'modules/container-app.bicep' = {
   name: 'basket-api'
   dependsOn: [acrPull]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'basket-api'
     azdServiceName: 'basket-api'
     exists: basketApiExists
@@ -321,7 +340,11 @@ module apiGateway 'modules/container-app.bicep' = {
   name: 'api-gateway'
   dependsOn: [acrPull]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'api-gateway'
     azdServiceName: 'api-gateway'
     exists: apiGatewayExists
@@ -346,7 +369,11 @@ module storefront 'modules/container-app.bicep' = {
   name: 'storefront'
   dependsOn: [acrPull]
   params: {
-    ...appDefaults
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
     name: 'storefront'
     azdServiceName: 'storefront'
     exists: storefrontExists
