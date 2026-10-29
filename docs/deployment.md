@@ -96,16 +96,18 @@ Internet ──HTTPS──▶ storefront (nginx) ──▶ api-gateway ──▶
 | Container Apps environment | VNet-integrated (TCP ingress needs it), Consumption workload profile, logs to Log Analytics |
 | Container registry (Basic) | images built in the cloud (`remoteBuild`), pulled by a user-assigned managed identity with `AcrPull` |
 | PostgreSQL Flexible Server (B1ms, v16) | databases `catalogdb`, `orderingdb`, `keycloak`; TLS required; reachable from Azure only |
-| Container apps | `storefront` and `keycloak` with public HTTPS ingress; `api-gateway`, the three services, `redis` and `rabbitmq` internal only |
+| Container apps | `storefront` and `keycloak` with public HTTPS ingress; `api-gateway`, the three services, `redis` and `rabbitmq` internal only; up to three replicas each for the gateway, the services and the storefront |
+| Container Apps jobs | `catalog-migrate`, `ordering-migrate`: run the service image with `migrate`, triggered by `azd` (see below) |
 
 Keycloak runs in production mode (`start --optimized`) from [`deploy/keycloak/Dockerfile`](../deploy/keycloak/Dockerfile), with its data in PostgreSQL and the realm baked into the image. Two import placeholders in the realm are filled from the environment: `STOREFRONT_URL` (an extra redirect URI and post-logout URI) and `STOREFRONT_BFF_CLIENT_SECRET`. Their defaults are the local values, so every other run mode imports the realm unchanged.
 
 ### Deploy
 
-Requires the [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) and an Azure subscription. Docker is not needed: images are built in the registry.
+Requires the [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) (used by the migration hook) and an Azure subscription. Docker is not needed: images are built in the registry.
 
 ```bash
 azd auth login
+az login
 azd up          # prompts for an environment name, subscription, region and the four secrets
 azd up          # a second run attaches the health probes to the deployed images (see below)
 ```
@@ -113,6 +115,18 @@ azd up          # a second run attaches the health probes to the deployed images
 `azd up` prints `STOREFRONT_URL` and `KEYCLOAK_URL`. Later code changes need only `azd deploy` (or `azd deploy <service>`). `azd down --purge` deletes everything.
 
 The four secure parameters are the PostgreSQL admin password (it must meet Azure's complexity rules), the RabbitMQ password, the Keycloak admin password and the BFF client secret. `azd` stores them in the environment's local configuration under `.azure/`, which is git-ignored.
+
+### Migrations
+
+Catalog and Ordering scale like the other services because neither migrates at startup here (`Database__MigrateOnStartup=false`). Each has a manually triggered Container Apps job, and a `postpublish` hook in `azure.yaml` runs it ([`infra/scripts/run-migration-job.sh`](../infra/scripts/run-migration-job.sh), with a PowerShell twin for Windows):
+
+1. `azd` builds and pushes the service image (publish).
+2. The hook finds the tag it just pushed, points the job at that image and starts it: migrations, plus the catalog seed.
+3. It waits for the execution to succeed. Only then does `azd` roll out the new revision, whose readiness check needs the current schema.
+
+If the migration fails, the hook fails and `azd deploy` stops before the rollout, while the previous revision keeps serving. Logs: `az containerapp job logs show --name catalog-migrate --resource-group rg-<env> --execution <name> --container migrate` (the hook prints the exact command). Migrations therefore have to be compatible with the revision still running (expand first, contract in a later release), as with any rolling deployment.
+
+The hook reads the image tag from the registry rather than from `azd`'s `SERVICE_<NAME>_IMAGE_NAME`, which may still name the previous deployment's image when the hook runs. CI runs `shellcheck` and a PowerShell parse on the scripts, and both were exercised against a stubbed `az` (repository selection, job update and start, success and failure). Neither has run against Azure yet.
 
 ### Behind the Container Apps ingress
 
@@ -129,5 +143,4 @@ Running behind a TLS-terminating proxy that routes internal traffic by `Host` ne
 - **Redis and RabbitMQ are not durable.** They have no volumes here: a restart loses open baskets and unconsumed messages (orders already written to PostgreSQL are safe), and the gateway's Data Protection keys, which signs everyone out. Azure Managed Redis and Azure Service Bus are the production choices; the latter would need a different messaging transport.
 - **No telemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` isn't set, so only console logs reach Log Analytics. Pointing it at an OpenTelemetry collector or Application Insights is a follow-up.
 - **Demo identities are public.** The realm's demo users (`ada` / `ada` with the admin role, `grace` / `grace`), the `storefront-tests` password-grant client and the localhost redirect URIs come along. Change or remove them in the Keycloak admin console, or keep the deployment private.
-- **Catalog and Ordering stay at one replica.** They still migrate at startup here; a Container Apps job running `migrate` (the Kubernetes setup's approach) would lift that. The gateway already scales to three replicas.
 - **Costs.** PostgreSQL B1ms, the registry and the always-on replicas (min 1 per app) incur charges while the environment exists.
