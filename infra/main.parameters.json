@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+    "catalogApiExists": { "value": "${SERVICE_CATALOG_API_RESOURCE_EXISTS=false}" },
+    "basketApiExists": { "value": "${SERVICE_BASKET_API_RESOURCE_EXISTS=false}" },
+    "orderingApiExists": { "value": "${SERVICE_ORDERING_API_RESOURCE_EXISTS=false}" },
+    "apiGatewayExists": { "value": "${SERVICE_API_GATEWAY_RESOURCE_EXISTS=false}" },
+    "storefrontExists": { "value": "${SERVICE_STOREFRONT_RESOURCE_EXISTS=false}" },
+    "keycloakExists": { "value": "${SERVICE_KEYCLOAK_RESOURCE_EXISTS=false}" }
+  }
+}

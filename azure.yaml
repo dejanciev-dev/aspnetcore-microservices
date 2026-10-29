@@ -1,0 +1,69 @@
+# Azure Developer CLI: `azd up` provisions infra/ (Azure Container Apps) and deploys every service.
+# Images are built in Azure Container Registry (remoteBuild), so Docker isn't needed locally.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: storefront
+metadata:
+  template: aspnetcore-microservices
+
+infra:
+  provider: bicep
+  path: infra
+
+services:
+  catalog-api:
+    project: src/Services/Catalog/Catalog.API
+    host: containerapp
+    language: docker
+    docker:
+      path: ../../../Dockerfile
+      context: ../../../..
+      remoteBuild: true
+      buildArgs:
+        - PROJECT=Services/Catalog/Catalog.API/Catalog.API.csproj
+
+  basket-api:
+    project: src/Services/Basket/Basket.API
+    host: containerapp
+    language: docker
+    docker:
+      path: ../../../Dockerfile
+      context: ../../../..
+      remoteBuild: true
+      buildArgs:
+        - PROJECT=Services/Basket/Basket.API/Basket.API.csproj
+
+  ordering-api:
+    project: src/Services/Ordering/Ordering.API
+    host: containerapp
+    language: docker
+    docker:
+      path: ../../../Dockerfile
+      context: ../../../..
+      remoteBuild: true
+      buildArgs:
+        - PROJECT=Services/Ordering/Ordering.API/Ordering.API.csproj
+
+  api-gateway:
+    project: src/ApiGateways/ApiGateway
+    host: containerapp
+    language: docker
+    docker:
+      path: ../../Dockerfile
+      context: ../../..
+      remoteBuild: true
+      buildArgs:
+        - PROJECT=ApiGateways/ApiGateway/ApiGateway.csproj
+
+  storefront:
+    project: src/Web/storefront
+    host: containerapp
+    language: docker
+    docker:
+      remoteBuild: true
+
+  keycloak:
+    project: deploy/keycloak
+    host: containerapp
+    language: docker
+    docker:
+      remoteBuild: true

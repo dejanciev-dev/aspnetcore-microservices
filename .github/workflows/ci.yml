@@ -111,6 +111,23 @@ jobs:
             tests/e2e/test-results/
             compose.log
 
+  azure-infra:
+    name: Azure infrastructure (Bicep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Compiles infra/ and runs the Bicep linter; any warning fails the job. Deploying needs an
+      # Azure subscription (`azd up`), so it isn't part of CI.
+      - name: Build and lint
+        run: |
+          az bicep install
+          az bicep build --file infra/main.bicep --stdout > /dev/null 2> bicep.log || true
+          cat bicep.log
+          if grep -qE "Warning|Error" bicep.log; then
+            echo "::error title=Bicep::$(sed 's/%/%25/g' bicep.log | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
+
   kubernetes:
     name: Kubernetes (kind) end-to-end
     runs-on: ubuntu-latest
