@@ -165,6 +165,8 @@ Tests use **Vitest** through the Angular CLI (`@angular/build:unit-test`) with `
 
 HTTP is faked with `HttpTestingController`. Because `httpResource` registers pending tasks, the specs flush requests first and then `await ApplicationRef.whenStable()`.
 
+The same screens are also tested in a real browser against the real backend by the **Playwright** suite in [`tests/e2e`](../tests/e2e). See [Running the tests](getting-started.md#running-the-tests). Its locators are user-facing: roles, accessible names and visible text, including the `aria-label`s on the basket link, the quantity group and the remove buttons. Renaming those labels breaks the end-to-end tests on purpose.
+
 ## Scripts
 
 ```bash

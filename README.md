@@ -119,7 +119,7 @@ flowchart LR
 | **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter |
 | **Orchestration** | .NET Aspire 13 AppHost, Aspire Dashboard |
 | **Front end** | Angular 21, TypeScript 5.9, standalone components, signals, `httpResource`, Signal Forms, SCSS |
-| **Testing** | xUnit v3 on Microsoft.Testing.Platform, `WebApplicationFactory`, **Testcontainers** (real PostgreSQL and Redis), **Pact** contract tests, Vitest + Angular TestBed |
+| **Testing** | xUnit v3 on Microsoft.Testing.Platform, `WebApplicationFactory`, **Testcontainers** (real PostgreSQL and Redis), **Pact** contract tests, **Playwright** end-to-end tests, Vitest + Angular TestBed |
 | **Containers** | Multi-stage Dockerfiles, **chiseled** (distroless, non-root) .NET images, nginx |
 | **CI** | GitHub Actions: build, test and coverage for .NET and Angular, plus Docker image builds |
 
@@ -298,12 +298,14 @@ The storefront in [`src/Web/storefront`](src/Web/storefront) uses the latest Ang
 ```bash
 dotnet test                                          # 31 API + 9 contract + 18 container-backed tests (xUnit v3)
 cd src/Web/storefront && npx ng test --watch=false   # 17 unit/component tests (Vitest)
+cd tests/e2e && npm ci && npx playwright test        # 13 browser tests + 2 sign-in setups (Playwright)
 ```
 
 - **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. A test authentication handler stands in for Keycloak, which keeps authorization rules (401, 403, per-user isolation) fast to test. Downstream services are replaced by fakes. Gateway tests cover the BFF endpoints, the CSRF check, rate limiting and output caching.
 - **Contract tests** (`tests/Services.ContractTests`): consumer-driven contracts with **Pact**. Basket records what it needs from Catalog (product lookup, 404), Ordering (create order with the relayed token) and the `catalog.product-price-changed` event; Ordering records what it needs in `basket.checked-out`. Each side runs its real client or handler, and the providers verify the committed pact files against the real services. Renaming a field one side relies on fails the build, even though each service keeps its own copy of the types.
 - **Integration tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18, Redis 8 and RabbitMQ 4 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across restarts and Redis expiry. They also run **end-to-end messaging flows across two live services**: a price change repricing a basket via the outbox, checkout creating an order via RabbitMQ, and a duplicate message producing exactly one order. **Keycloak** tests validate real tokens (signature, audience, role mapping) and drive a **full browser-style BFF sign-in** through the real login page, down to the access token the gateway relays. Without Docker they are skipped locally; in CI they must run.
 - **Front end:** stores and components are tested with `HttpTestingController`, covering request shapes, rendering, validation and error states.
+- **End-to-end tests** (`tests/e2e`): **Playwright** drives Chromium through the whole system started with Docker Compose. It signs in on the real Keycloak page, browses and filters the catalog, fills a basket, places an order that travels through RabbitMQ to Ordering, and signs out. An admin changes a price and watches it reach an open basket via the outbox. The signed-out catalog tests also run against `dotnet run` + `ng serve`, without Docker.
 - **CI** runs both suites and builds every Docker image on each push and pull request.
 
 ## 📁 Project structure
@@ -325,6 +327,7 @@ aspnetcore-microservices/
 ├── tests/
 │   ├── Services.Tests/                  # API tests (in-memory, fast)
 │   ├── Services.ContractTests/          # Pact contracts: Basket ↔ Catalog, Ordering (HTTP + events)
+│   ├── e2e/                             # Playwright browser tests against the running stack
 │   └── Services.IntegrationTests/       # PostgreSQL, Redis, RabbitMQ, Keycloak via Testcontainers
 ├── deploy/keycloak/                     # Keycloak realm (clients, roles, demo users)
 ├── docs/                                # architecture, API, front end, setup
@@ -344,7 +347,7 @@ Each service follows the same layout: `Program.cs` (composition root), `Endpoint
 - [x] Rate limiting at the gateway
 - [x] Output caching at the gateway (catalog reads)
 - [x] Contract tests between Basket and its downstream services (Pact, HTTP and events)
-- [ ] Playwright end-to-end tests
+- [x] Playwright end-to-end tests
 - [ ] Kubernetes manifests / Azure Container Apps deployment via `azd`
 
 ## 📚 Documentation

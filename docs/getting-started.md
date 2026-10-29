@@ -209,6 +209,29 @@ npx ng test --watch=false
 
 `tests/Services.IntegrationTests` starts PostgreSQL, Redis, RabbitMQ and Keycloak with **Testcontainers**, so it needs Docker. Without Docker the 18 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
 
+### End-to-end tests (Playwright)
+
+`tests/e2e` drives the storefront in Chromium against a **running** stack on `http://localhost:4200` (override with `E2E_BASE_URL`). It is a separate npm package, so `dotnet test` doesn't run it.
+
+```bash
+docker compose up -d --build --wait      # the full stack, as CI runs it
+cd tests/e2e
+npm ci
+npx playwright install chromium          # once
+npx playwright test                      # everything: 13 tests + 2 sign-in setups
+npx playwright test --project=anonymous  # signed-out catalog tests only
+npx playwright show-report               # HTML report, with traces for failures
+```
+
+| Project | Needs | Covers |
+|---|---|---|
+| `anonymous` | storefront, gateway, Catalog: also works with `dotnet run` + `npm start`, no Docker | Catalog listing, filters and search in the URL, product page, unknown product |
+| `setup` → `authenticated` | Keycloak, so Docker Compose or Aspire | Signs in as `ada` and `grace` once, then tests sign-in and sign-out, the basket, checkout through RabbitMQ and an admin price change |
+
+The tests use the demo users and the seeded products. They empty the user's basket before each test and restore any price they change, so they can run repeatedly against the same volumes. Placed orders stay in the database. Product images are stubbed so the tests don't need internet access. In CI the same commands run after `docker compose up --wait`; on failure the HTML report, traces and container logs are uploaded as the `e2e-results` artifact.
+
+### Contract tests
+
 `tests/Services.ContractTests` runs the Pact contracts between Basket, Catalog and Ordering. When you change what one service sends or reads from another, run the tests and commit the updated files in `tests/Services.ContractTests/pacts/` together with the code. CI fails when the committed pacts are out of date. If a provider test fails, the provider broke a field a consumer relies on; the output names the JSON path (for example `$.items[0] -> Actual map is missing the following keys: quantity`). To drop an interaction you removed from a consumer test, delete its pact file and rerun, because Pact merges interactions into existing files.
 
 See the "Testing" sections in [architecture.md](architecture.md#testing-strategy) and [frontend.md](frontend.md#testing) for what each suite covers.

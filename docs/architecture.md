@@ -563,6 +563,7 @@ One origin means no CORS, a first-party session cookie, a single place for sign-
 | Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
+| End to end | Playwright (Chromium) against the Docker Compose stack | Real Keycloak sign-in and sign-out (including the SSO session), catalog filters in the URL, basket badge and totals, checkout validation, an order placed through RabbitMQ and polled until Ordering has it, an admin price change shown at once (cache eviction) and repricing an open basket via the outbox |
 | Containers | GitHub Actions `docker compose build` | Every image builds from a clean checkout |
 
 ### Contract tests
