@@ -12,11 +12,13 @@ interface Product {
 }
 
 test.describe('catalog administration', () => {
-  let original: Product;
+  let original: Product | undefined;
 
   test.beforeEach(async ({ page }) => {
+    original = undefined;
     await page.goto('/products');
-    const response = await page.request.get(`/api/products/${products.usbMicrophone.id}`);
+    // The session cookie goes along, so even a GET needs the anti-CSRF header.
+    const response = await page.request.get(`/api/products/${products.usbMicrophone.id}`, { headers: CSRF });
     await expectOk(response);
     original = await response.json();
     await api.clearBasket(page);
@@ -24,6 +26,7 @@ test.describe('catalog administration', () => {
 
   // Put the seeded price back so reruns and other tests see the catalog as seeded.
   test.afterEach(async ({ page }) => {
+    if (!original) return;   // setup failed before anything changed
     const { id, ...fields } = original;
     await expectOk(await page.request.put(`/api/products/${id}`, { headers: CSRF, data: fields }));
     await api.clearBasket(page);
@@ -35,10 +38,11 @@ test.describe('catalog administration', () => {
   });
 
   test('a price change reaches open baskets through RabbitMQ', async ({ page }) => {
-    const newPrice = (original.price + 10).toFixed(2);
-    await api.addToBasket(page, original.id);
+    const product = original!;
+    const newPrice = (product.price + 10).toFixed(2);
+    await api.addToBasket(page, product.id);
 
-    await page.goto(`/products/${original.id}`);
+    await page.goto(`/products/${product.id}`);
     await page.getByRole('spinbutton', { name: 'New price' }).fill(newPrice);
     await page.getByRole('button', { name: 'Update price' }).click();
 
@@ -50,7 +54,7 @@ test.describe('catalog administration', () => {
     await page.goto('/basket');
     await expect(async () => {
       await page.reload();
-      await expect(page.locator('.line', { hasText: original.name })).toContainText(`$${newPrice}`, { timeout: 1_000 });
+      await expect(page.locator('.line', { hasText: product.name })).toContainText(`$${newPrice}`, { timeout: 1_000 });
     }).toPass({ timeout: 30_000 });
   });
 });
