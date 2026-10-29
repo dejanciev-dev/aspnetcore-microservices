@@ -255,6 +255,29 @@ module keycloak 'modules/container-app.bicep' = {
   }
 }
 
+module catalogMigrate 'modules/migration-job.bicep' = {
+  name: 'catalog-migrate'
+  dependsOn: [acrPull, databases]
+  params: {
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
+    name: 'catalog-migrate'
+    appName: 'catalog-api'
+    appExists: catalogApiExists
+    secrets: {
+      items: [
+        { name: 'catalogdb', value: npgsql(postgres.properties.fullyQualifiedDomainName, 'catalogdb', postgresAdmin, npgsqlPassword) }
+      ]
+    }
+    env: [
+      { name: 'ConnectionStrings__catalogdb', secretRef: 'catalogdb' }
+    ]
+  }
+}
+
 module catalogApi 'modules/container-app.bicep' = {
   name: 'catalog-api'
   dependsOn: [acrPull, databases]
@@ -268,7 +291,7 @@ module catalogApi 'modules/container-app.bicep' = {
     azdServiceName: 'catalog-api'
     exists: catalogApiExists
     targetPort: 8080
-    maxReplicas: 1   // migrations run at startup
+    maxReplicas: 3   // the catalog-migrate job owns the schema; readiness waits for it
     secrets: {
       items: [
         { name: 'catalogdb', value: npgsql(postgres.properties.fullyQualifiedDomainName, 'catalogdb', postgresAdmin, npgsqlPassword) }
@@ -276,10 +299,34 @@ module catalogApi 'modules/container-app.bicep' = {
       ]
     }
     env: concat(commonServiceEnv, [
+      { name: 'Database__MigrateOnStartup', value: 'false' }
       { name: 'ConnectionStrings__catalogdb', secretRef: 'catalogdb' }
       { name: 'ConnectionStrings__rabbitmq', secretRef: 'rabbitmq' }
     ])
     probes: dotnetProbes
+  }
+}
+
+module orderingMigrate 'modules/migration-job.bicep' = {
+  name: 'ordering-migrate'
+  dependsOn: [acrPull, databases]
+  params: {
+    location: location
+    tags: tags
+    environmentId: environment.id
+    identityId: identity.id
+    registryServer: registry.properties.loginServer
+    name: 'ordering-migrate'
+    appName: 'ordering-api'
+    appExists: orderingApiExists
+    secrets: {
+      items: [
+        { name: 'orderingdb', value: npgsql(postgres.properties.fullyQualifiedDomainName, 'orderingdb', postgresAdmin, npgsqlPassword) }
+      ]
+    }
+    env: [
+      { name: 'ConnectionStrings__orderingdb', secretRef: 'orderingdb' }
+    ]
   }
 }
 
@@ -296,7 +343,7 @@ module orderingApi 'modules/container-app.bicep' = {
     azdServiceName: 'ordering-api'
     exists: orderingApiExists
     targetPort: 8080
-    maxReplicas: 1   // migrations run at startup
+    maxReplicas: 3   // the ordering-migrate job owns the schema; readiness waits for it
     secrets: {
       items: [
         { name: 'orderingdb', value: npgsql(postgres.properties.fullyQualifiedDomainName, 'orderingdb', postgresAdmin, npgsqlPassword) }
@@ -304,6 +351,7 @@ module orderingApi 'modules/container-app.bicep' = {
       ]
     }
     env: concat(commonServiceEnv, [
+      { name: 'Database__MigrateOnStartup', value: 'false' }
       { name: 'ConnectionStrings__orderingdb', secretRef: 'orderingdb' }
       { name: 'ConnectionStrings__rabbitmq', secretRef: 'rabbitmq' }
     ])

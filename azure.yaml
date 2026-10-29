@@ -1,5 +1,6 @@
 # Azure Developer CLI: `azd up` provisions infra/ (Azure Container Apps) and deploys every service.
 # Images are built in Azure Container Registry (remoteBuild), so Docker isn't needed locally.
+# Catalog and Ordering run their migration job from a postpublish hook, which uses the Azure CLI.
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 name: storefront
 metadata:
@@ -20,6 +21,15 @@ services:
       remoteBuild: true
       buildArgs:
         - PROJECT=Services/Catalog/Catalog.API/Catalog.API.csproj
+    # Migrate with the image just pushed, before the new revision rolls out (needs `az login`).
+    hooks:
+      postpublish:
+        posix:
+          shell: sh
+          run: bash "$(git rev-parse --show-toplevel)/infra/scripts/run-migration-job.sh" catalog-api
+        windows:
+          shell: pwsh
+          run: '& "$(git rev-parse --show-toplevel)/infra/scripts/run-migration-job.ps1" catalog-api'
 
   basket-api:
     project: src/Services/Basket/Basket.API
@@ -42,6 +52,15 @@ services:
       remoteBuild: true
       buildArgs:
         - PROJECT=Services/Ordering/Ordering.API/Ordering.API.csproj
+    # Migrate with the image just pushed, before the new revision rolls out (needs `az login`).
+    hooks:
+      postpublish:
+        posix:
+          shell: sh
+          run: bash "$(git rev-parse --show-toplevel)/infra/scripts/run-migration-job.sh" ordering-api
+        windows:
+          shell: pwsh
+          run: '& "$(git rev-parse --show-toplevel)/infra/scripts/run-migration-job.ps1" ordering-api'
 
   api-gateway:
     project: src/ApiGateways/ApiGateway

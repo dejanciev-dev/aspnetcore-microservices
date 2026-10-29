@@ -127,6 +127,17 @@ jobs:
             echo "::error title=Bicep::$(sed 's/%/%25/g' bicep.log | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
+      - name: Check the azd hook scripts
+        run: |
+          shellcheck infra/scripts/*.sh
+          pwsh -NoProfile -Command '
+            $failed = $false
+            foreach ($file in Get-ChildItem infra/scripts/*.ps1) {
+              $errors = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+              foreach ($e in $errors) { Write-Output "::error file=infra/scripts/$($file.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"; $failed = $true }
+            }
+            if ($failed) { exit 1 }'
       - name: Validate azure.yaml against the azd schema
         run: |
           pip install --quiet jsonschema pyyaml
