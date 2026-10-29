@@ -196,7 +196,7 @@ To watch messaging in action: change a product's price (`PUT /api/products/{id}`
 The test projects use **xUnit v3** on **Microsoft.Testing.Platform** (opted in via `global.json`).
 
 ```bash
-# everything: 25 API tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
+# everything: 31 API tests + 9 contract tests + 18 PostgreSQL/Redis/RabbitMQ/Keycloak tests
 dotnet test
 
 # with TRX reports and Cobertura coverage
@@ -208,6 +208,8 @@ npx ng test --watch=false
 ```
 
 `tests/Services.IntegrationTests` starts PostgreSQL, Redis, RabbitMQ and Keycloak with **Testcontainers**, so it needs Docker. Without Docker the 18 tests are reported as **skipped** locally. When the `CI` environment variable is set (GitHub Actions sets it), a missing Docker is a failure instead, so the pipeline can never pass without actually testing the databases.
+
+`tests/Services.ContractTests` runs the Pact contracts between Basket, Catalog and Ordering. When you change what one service sends or reads from another, run the tests and commit the updated files in `tests/Services.ContractTests/pacts/` together with the code. CI fails when the committed pacts are out of date. If a provider test fails, the provider broke a field a consumer relies on; the output names the JSON path (for example `$.items[0] -> Actual map is missing the following keys: quantity`). To drop an interaction you removed from a consumer test, delete its pact file and rerun, because Pact merges interactions into existing files.
 
 See the "Testing" sections in [architecture.md](architecture.md#testing-strategy) and [frontend.md](frontend.md#testing) for what each suite covers.
 

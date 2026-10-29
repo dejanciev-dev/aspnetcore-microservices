@@ -559,10 +559,27 @@ One origin means no CORS, a first-party session cookie, a single place for sign-
 | Authorization rules | Test authentication handler (`X-Test-User` / `X-Test-Roles`) | 401 for anonymous calls, 403 for non-admins, per-user basket and order isolation, admin access to any order |
 | Real tokens | Testcontainers (Keycloak 26 with the project realm) | Signature, issuer and audience validation, realm-role mapping (admin vs customer), tampered tokens rejected |
 | BFF sign-in (end to end) | Keycloak container + the real gateway + an echo backend | `/bff/login` → Keycloak login form → `/signin-oidc` → HttpOnly session → `/bff/user` roles → access token relayed with the right audience → logout ends the SSO session |
+| Service contracts | PactNet 5: consumer tests against Pact mocks, provider verification on Kestrel | Basket's real `CatalogClient`, `OrderingClient` (with token relay) and price-change handler, Ordering's checkout handler; the real Catalog, Ordering and Basket honour every committed pact (see [Contract tests](#contract-tests)) |
 | Messaging (end to end) | Testcontainers (RabbitMQ 4) with two live services per test | Catalog price change → outbox → relay → Basket reprices the Redis cart; Basket checkout → RabbitMQ → order in Ordering's PostgreSQL; a duplicated message creates one order; unchanged prices stage no event |
 | Front-end state | Vitest, `HttpTestingController` | `BasketStore` URLs, payloads and state transitions |
 | Front-end components | Angular TestBed | Rendering, query-param binding, form validation, error states |
 | Containers | GitHub Actions `docker compose build` | Every image builds from a clean checkout |
+
+### Contract tests
+
+Services share no contract assemblies: each declares its own copy of the DTOs and events it exchanges ([Messaging](#messaging)). That keeps them independently deployable, but the compiler can no longer catch a renamed field. The consumer-driven contracts in `tests/Services.ContractTests` restore that safety net.
+
+| Consumer | Provider (pact name) | Interactions |
+|---|---|---|
+| Basket.API | Catalog.API | `GET /api/products/{id}` → `id`, `name`, `imageUrl`, `price`; unknown id → `404` |
+| Basket.API | Ordering.API | `POST /api/orders` with `Authorization: Bearer …` → `201` with `id`, `total` |
+| Basket.API | Catalog.API.Events | `catalog.product-price-changed` |
+| Ordering.API | Basket.API.Events | `basket.checked-out` |
+
+- **Consumers write the contract** by running their real code against a Pact mock: Basket's typed clients (including `ForwardAccessTokenHandler`) and its price-change handler, and Ordering's checkout handler. Only the fields a consumer reads go into the pact, with type and regex matchers rather than exact values, so providers can add fields freely.
+- **Providers verify it** against the real service, started by `WebApplicationFactory` on a free Kestrel port with its in-memory store. A provider-state endpoint seeds the data an interaction assumes (`a product exists`), and a test scheme accepts any bearer token; token validation is covered by the Keycloak tests.
+- **Events** use separate pact names (`*.Events`) because a Pact verifier checks either HTTP or messages. Each provider host serves its events over HTTP, built by real code (Basket's goes through `MessagingOrderingClient`) and serialized with the bus's JSON settings. PactNet 5.0.1's own message transport is avoided because the verifier rejects its `message://` URL.
+- **No broker:** with every service in one repository, the pact files are committed under `tests/Services.ContractTests/pacts/`. Consumer tests regenerate them, provider tests verify the committed copies, and CI fails if a run leaves them changed, so a contract change always shows up in a diff for review. Splitting the services into separate repositories would mean publishing pacts to a Pact Broker and running `can-i-deploy`.
 
 ## Known limitations
 
