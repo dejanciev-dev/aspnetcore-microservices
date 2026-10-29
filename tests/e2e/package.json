@@ -1,0 +1,14 @@
+{
+  "name": "storefront-e2e",
+  "private": true,
+  "description": "Playwright end-to-end tests for the storefront and the services behind it",
+  "scripts": {
+    "test": "playwright test",
+    "test:anonymous": "playwright test --project=anonymous",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.20.5"
+  }
+}

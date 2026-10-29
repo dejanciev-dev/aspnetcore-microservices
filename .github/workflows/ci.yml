@@ -75,6 +75,42 @@ jobs:
       - run: npx ng build --configuration production
       - run: npx ng test --watch=false
 
+  e2e:
+    name: Playwright end-to-end
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # The whole system as in production-like local use: nginx-served storefront, gateway,
+      # services, PostgreSQL, Redis, RabbitMQ and Keycloak. --wait blocks until healthchecks pass.
+      - name: Start the stack
+        working-directory: .
+        run: docker compose up --detach --build --wait --wait-timeout 600
+      - run: npx playwright test
+      - name: Container logs
+        if: failure()
+        working-directory: .
+        run: docker compose logs --no-color --timestamps > compose.log; tail -n 300 compose.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-results
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            compose.log
+
   containers:
     name: Docker images
     runs-on: ubuntu-latest
