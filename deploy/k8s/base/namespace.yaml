@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: storefront
+  labels:
+    # Every pod meets "baseline". The .NET services and Keycloak also meet "restricted"; the stock
+    # postgres, redis, rabbitmq and nginx images start as root, so they don't.
+    pod-security.kubernetes.io/enforce: baseline

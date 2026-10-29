@@ -21,6 +21,7 @@ x-service-defaults: &service-defaults
 services:
   catalog-api:
     <<: *service-defaults
+    image: storefront/catalog-api:local   # also what deploy/k8s/overlays/kind runs
     build:
       context: .
       dockerfile: src/Dockerfile
@@ -38,6 +39,7 @@ services:
 
   ordering-api:
     <<: *service-defaults
+    image: storefront/ordering-api:local   # also what deploy/k8s/overlays/kind runs
     build:
       context: .
       dockerfile: src/Dockerfile
@@ -55,6 +57,7 @@ services:
 
   basket-api:
     <<: *service-defaults
+    image: storefront/basket-api:local   # also what deploy/k8s/overlays/kind runs
     build:
       context: .
       dockerfile: src/Dockerfile
@@ -76,6 +79,7 @@ services:
 
   api-gateway:
     <<: *service-defaults
+    image: storefront/api-gateway:local   # also what deploy/k8s/overlays/kind runs
     build:
       context: .
       dockerfile: src/Dockerfile
@@ -97,6 +101,7 @@ services:
       ordering-api: { condition: service_started }
 
   storefront:
+    image: storefront/storefront:local   # also what deploy/k8s/overlays/kind runs
     build: src/Web/storefront
     restart: unless-stopped
     ports:

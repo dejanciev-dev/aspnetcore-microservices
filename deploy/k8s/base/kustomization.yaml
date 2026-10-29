@@ -1,0 +1,52 @@
+# The whole storefront on Kubernetes: four .NET services, the nginx-served Angular app, and the
+# infrastructure they need (PostgreSQL, Redis, RabbitMQ, Keycloak, Aspire dashboard).
+# Environment-specific values (public URLs, secrets, image registry, exposure) come from overlays.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: storefront
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: storefront
+    includeSelectors: false
+    includeTemplates: true    # pods too, so `kubectl logs -l app.kubernetes.io/part-of=storefront` finds them
+
+resources:
+  - namespace.yaml
+  - ../../keycloak          # realm ConfigMap
+  - postgres.yaml
+  - redis.yaml
+  - rabbitmq.yaml
+  - keycloak.yaml
+  - aspire-dashboard.yaml
+  - catalog-api.yaml
+  - basket-api.yaml
+  - ordering-api.yaml
+  - api-gateway.yaml
+  - storefront.yaml
+
+configMapGenerator:
+  # Shared by every .NET service (envFrom).
+  - name: service-config
+    literals:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      # The token issuer: Keycloak's public HTTPS URL (overlays set it).
+      - Identity__Authority=https://auth.example.com/realms/storefront
+  - name: keycloak-config
+    literals:
+      - KC_HOSTNAME=https://auth.example.com   # browser-facing URL; overlays set it
+
+images:
+  - name: catalog-api
+    newName: storefront/catalog-api
+  - name: basket-api
+    newName: storefront/basket-api
+  - name: ordering-api
+    newName: storefront/ordering-api
+  - name: api-gateway
+    newName: storefront/api-gateway
+  - name: storefront
+    newName: storefront/storefront

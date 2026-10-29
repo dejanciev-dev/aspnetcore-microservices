@@ -1,0 +1,63 @@
+# A local cluster with kind, reachable on the same URLs as Docker Compose:
+#   storefront http://localhost:4200 · Keycloak http://localhost:8080 · Aspire dashboard http://localhost:18888
+#
+#   kind create cluster --config deploy/k8s/overlays/kind/kind-config.yaml
+#   docker compose build      # tags storefront/<service>:local
+#   for s in catalog-api basket-api ordering-api api-gateway storefront; do kind load docker-image storefront/$s:local; done
+#   kubectl apply -k deploy/k8s/overlays/kind
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: service-config
+    behavior: merge
+    literals:
+      # Tokens are issued for http://localhost:8080 (what the browser sees); pods fetch discovery
+      # and keys from keycloak:8080. Plain HTTP is a local-only exception.
+      - Identity__Authority=http://localhost:8080/realms/storefront
+      - Identity__MetadataAddress=http://keycloak:8080/realms/storefront/.well-known/openid-configuration
+      - Identity__RequireHttpsMetadata=false
+  - name: keycloak-config
+    behavior: merge
+    literals:
+      - KC_HOSTNAME=http://localhost:8080
+
+# Development values, identical to the docker-compose defaults. Never reuse them elsewhere.
+secretGenerator:
+  - name: storefront-secrets
+    literals:
+      - postgres-password=postgres
+      - rabbitmq-password=storefront
+      - keycloak-admin-password=admin
+      - keycloak-client-secret=storefront-bff-dev-secret
+
+# Images built locally by `docker compose build` and loaded into the kind node.
+images:
+  - name: storefront/catalog-api
+    newTag: local
+  - name: storefront/basket-api
+    newTag: local
+  - name: storefront/ordering-api
+    newTag: local
+  - name: storefront/api-gateway
+    newTag: local
+  - name: storefront/storefront
+    newTag: local
+
+# Expose what a browser needs on fixed node ports, which kind-config.yaml maps to localhost.
+patches:
+  - target: { kind: Service, name: storefront }
+    patch: |
+      - { op: add, path: /spec/type, value: NodePort }
+      - { op: add, path: /spec/ports/0/nodePort, value: 30420 }
+  - target: { kind: Service, name: keycloak }
+    patch: |
+      - { op: add, path: /spec/type, value: NodePort }
+      - { op: add, path: /spec/ports/0/nodePort, value: 30808 }
+  - target: { kind: Service, name: aspire-dashboard }
+    patch: |
+      - { op: add, path: /spec/type, value: NodePort }
+      - { op: add, path: /spec/ports/0/nodePort, value: 30888 }

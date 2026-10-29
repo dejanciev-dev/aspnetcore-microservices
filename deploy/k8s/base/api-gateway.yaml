@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+spec:
+  # One replica: session-cookie keys, the output cache and rate-limit counters are per instance
+  # (see docs/architecture.md, Known limitations).
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: api-gateway }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: api-gateway }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api-gateway
+          image: api-gateway
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: service-config }
+          env:
+            - { name: OTEL_SERVICE_NAME, value: api-gateway }
+            - name: Identity__ClientSecret
+              valueFrom: { secretKeyRef: { name: storefront-secrets, key: keycloak-client-secret } }
+            - { name: ReverseProxy__Clusters__catalog__Destinations__d1__Address, value: "http://catalog-api:8080" }
+            - { name: ReverseProxy__Clusters__basket__Destinations__d1__Address, value: "http://basket-api:8080" }
+            - { name: ReverseProxy__Clusters__ordering__Destinations__d1__Address, value: "http://ordering-api:8080" }
+          startupProbe:
+            httpGet: { path: /alive, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /alive, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+spec:
+  selector: { app.kubernetes.io/name: api-gateway }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

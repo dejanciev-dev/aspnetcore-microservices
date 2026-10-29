@@ -1,0 +1,9 @@
+# Publishes the realm to Kubernetes (deploy/k8s) as a ConfigMap. Docker Compose and Aspire mount
+# this folder directly; Keycloak only imports *.json, so this file is ignored there.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+configMapGenerator:
+  - name: keycloak-realm
+    files:
+      - storefront-realm.json

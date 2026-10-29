@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+spec:
+  # One replica: migrations run at startup (see docs/architecture.md, Known limitations).
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: catalog-api }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: catalog-api }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654             # the chiseled image's "app" user
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: catalog-api
+          image: catalog-api
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: service-config }
+          env:
+            - { name: OTEL_SERVICE_NAME, value: catalog-api }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: storefront-secrets, key: postgres-password } }
+            - name: RABBITMQ_PASSWORD
+              valueFrom: { secretKeyRef: { name: storefront-secrets, key: rabbitmq-password } }
+            - name: ConnectionStrings__catalogdb
+              value: Host=postgres;Database=catalogdb;Username=postgres;Password=$(POSTGRES_PASSWORD)
+            - name: ConnectionStrings__rabbitmq
+              value: amqp://storefront:$(RABBITMQ_PASSWORD)@rabbitmq:5672
+          # Startup covers migrations and seeding; liveness only asks whether the process responds,
+          # readiness also checks PostgreSQL and RabbitMQ.
+          startupProbe:
+            httpGet: { path: /alive, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /alive, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-api
+spec:
+  selector: { app.kubernetes.io/name: catalog-api }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

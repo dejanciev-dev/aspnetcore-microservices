@@ -111,6 +111,63 @@ jobs:
             tests/e2e/test-results/
             compose.log
 
+  kubernetes:
+    name: Kubernetes (kind) end-to-end
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: Render the manifests
+        run: |
+          kubectl kustomize deploy/k8s/base > /dev/null
+          kubectl kustomize deploy/k8s/overlays/kind > k8s-rendered.yaml
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: storefront
+          config: deploy/k8s/overlays/kind/kind-config.yaml
+      - name: Build the images and load them into kind
+        run: |
+          docker compose build catalog-api basket-api ordering-api api-gateway storefront
+          for s in catalog-api basket-api ordering-api api-gateway storefront; do
+            kind load docker-image "storefront/$s:local" --name storefront
+          done
+      - name: Deploy
+        run: |
+          kubectl apply -k deploy/k8s/overlays/kind
+          for s in postgres redis rabbitmq; do kubectl -n storefront rollout status "statefulset/$s" --timeout=5m; done
+          kubectl -n storefront wait deployment --all --for=condition=Available --timeout=10m
+          kubectl -n storefront get pods -o wide
+      # The same browser suite as against Docker Compose: the cluster serves the same URLs.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - run: npm ci
+        working-directory: tests/e2e
+      - run: npx playwright install --with-deps chromium
+        working-directory: tests/e2e
+      - run: npx playwright test
+        working-directory: tests/e2e
+      - name: Cluster state
+        if: failure()
+        run: |
+          kubectl -n storefront get all,pvc,events -o wide > k8s-state.txt 2>&1
+          kubectl -n storefront describe pods >> k8s-state.txt 2>&1
+          kubectl -n storefront logs -l app.kubernetes.io/part-of=storefront --all-containers --prefix --tail=200 --max-log-requests=20 > k8s-logs.txt 2>&1
+          tail -n 150 k8s-state.txt; tail -n 200 k8s-logs.txt
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: kubernetes-results
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            k8s-rendered.yaml
+            k8s-state.txt
+            k8s-logs.txt
+
   containers:
     name: Docker images
     runs-on: ubuntu-latest
