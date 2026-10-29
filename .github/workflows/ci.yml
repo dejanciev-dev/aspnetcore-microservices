@@ -153,10 +153,23 @@ jobs:
       - name: Cluster state
         if: failure()
         run: |
+          set +e
           kubectl -n storefront get all,pvc,events -o wide > k8s-state.txt 2>&1
           kubectl -n storefront describe pods >> k8s-state.txt 2>&1
           kubectl -n storefront logs -l app.kubernetes.io/part-of=storefront --all-containers --prefix --tail=200 --max-log-requests=20 > k8s-logs.txt 2>&1
-          tail -n 150 k8s-state.txt; tail -n 200 k8s-logs.txt
+
+          # Also as annotations, which (unlike job logs) can be read without signing in to GitHub.
+          annotate() {
+            text=$(cat)
+            [ -n "$text" ] && echo "::error title=$1::$(printf '%s' "$text" | tail -n 60 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          }
+          kubectl -n storefront get pods -o wide 2>&1 | annotate "Pods"
+          kubectl -n storefront get events --sort-by=.lastTimestamp 2>&1 | tail -n 30 | annotate "Recent events"
+          for pod in $(kubectl -n storefront get pods --no-headers | awk '{ split($2, r, "/"); if (r[1] != r[2]) print $1 }'); do
+            kubectl -n storefront logs "$pod" --all-containers --tail=60 2>&1 | annotate "Logs of $pod (not ready)"
+            kubectl -n storefront logs "$pod" --all-containers --previous --tail=60 2>/dev/null | annotate "Previous logs of $pod"
+          done
+          exit 0
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
