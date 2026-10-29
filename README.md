@@ -33,6 +33,7 @@ The goal is to show **current, production-minded practices** for .NET and Angula
 - **A single entry point** (YARP reverse proxy), so the browser only talks to one origin
 - **Authentication with Keycloak using the BFF pattern**: OIDC + PKCE in the gateway, no tokens in the browser, JWT validation and role-based authorization in every service
 - **Rate limiting at the edge**: per-user and per-IP token buckets, plus stricter policies for checkout and sign-in
+- **Output caching at the edge**: catalog reads are served by the gateway and evicted when an admin changes a product
 - **Resilient service-to-service calls** with retries, circuit breakers and timeouts
 - **Observability built in**: logs, metrics and distributed traces through OpenTelemetry
 - **Three ways to run it**: plain `dotnet run`, .NET Aspire, or Docker Compose
@@ -95,7 +96,7 @@ flowchart LR
 | **Catalog.API** | Products, categories, search and paging | **PostgreSQL** via EF Core 10; migrations, seeding, `ILIKE` search; publishes `ProductPriceChanged` through a **transactional outbox** |
 | **Basket.API** | Per-user shopping cart and checkout | **Redis** with a sliding 30-day expiry; **never trusts client prices**; reprices carts on events; **asynchronous checkout** |
 | **Ordering.API** | Order creation and history | **PostgreSQL** via EF Core 10; creates orders from `BasketCheckedOut` **idempotently** |
-| **ApiGateway** | Single public entry point and **BFF** | YARP reverse proxy; OIDC sign-in with Keycloak, HttpOnly session cookie, token refresh and relay, CSRF check, **rate limiting** |
+| **ApiGateway** | Single public entry point and **BFF** | YARP reverse proxy; OIDC sign-in with Keycloak, HttpOnly session cookie, token refresh and relay, CSRF check, **rate limiting**, **output caching** |
 | **BuildingBlocks.Common** | Shared cross-cutting concerns | OpenAPI + Scalar, ProblemDetails, health checks, resilience, OpenTelemetry, Keycloak JWT validation |
 | **BuildingBlocks.Messaging** | Integration events | RabbitMQ.Client 7 publisher (confirms) and consumer host (retries, DLQ), EF Core outbox + relay, trace propagation |
 | **AppHost** | Local orchestration | .NET Aspire 13: starts everything, wires URLs, hosts the dashboard |
@@ -299,7 +300,7 @@ dotnet test                                          # 25 API tests + 18 contain
 cd src/Web/storefront && npx ng test --watch=false   # 17 unit/component tests (Vitest)
 ```
 
-- **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. A test authentication handler stands in for Keycloak, which keeps authorization rules (401, 403, per-user isolation) fast to test. Downstream services are replaced by fakes. Gateway tests cover the BFF endpoints, the CSRF check and rate limiting.
+- **API tests** (`tests/Services.Tests`): each service is booted with `WebApplicationFactory` on its in-memory store. A test authentication handler stands in for Keycloak, which keeps authorization rules (401, 403, per-user isolation) fast to test. Downstream services are replaced by fakes. Gateway tests cover the BFF endpoints, the CSRF check, rate limiting and output caching.
 - **Integration tests** (`tests/Services.IntegrationTests`): **Testcontainers** starts real PostgreSQL 18, Redis 8 and RabbitMQ 4 containers. The tests cover migrations and seeding, `ILIKE` search, persistence across restarts and Redis expiry. They also run **end-to-end messaging flows across two live services**: a price change repricing a basket via the outbox, checkout creating an order via RabbitMQ, and a duplicate message producing exactly one order. **Keycloak** tests validate real tokens (signature, audience, role mapping) and drive a **full browser-style BFF sign-in** through the real login page, down to the access token the gateway relays. Without Docker they are skipped locally; in CI they must run.
 - **Front end:** stores and components are tested with `HttpTestingController`, covering request shapes, rendering, validation and error states.
 - **CI** runs both suites and builds every Docker image on each push and pull request.
@@ -339,7 +340,7 @@ Each service follows the same layout: `Program.cs` (composition root), `Endpoint
 - [x] Asynchronous messaging over RabbitMQ with a transactional outbox and idempotent consumers
 - [x] Authentication with Keycloak (OIDC, BFF pattern), replacing the demo user name
 - [x] Rate limiting at the gateway
-- [ ] Output caching at the gateway (e.g. catalog reads)
+- [x] Output caching at the gateway (catalog reads)
 - [ ] Contract tests between Basket and its downstream services
 - [ ] Playwright end-to-end tests
 - [ ] Kubernetes manifests / Azure Container Apps deployment via `azd`

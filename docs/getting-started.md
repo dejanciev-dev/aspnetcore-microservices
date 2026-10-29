@@ -129,6 +129,7 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 | `Identity:MetadataAddress` | all services, gateway | *(derived from Authority)* | Where to fetch discovery and keys when the internal host differs (Compose) |
 | `RateLimiting:Anonymous:*` / `RateLimiting:Authenticated:*` | gateway | burst 60 / 200, then 30 / 100 per 10 s | Global token buckets per IP / per user (`TokenLimit`, `TokensPerPeriod`, `ReplenishmentPeriodSeconds`) |
 | `RateLimiting:Checkout:*` / `RateLimiting:Login:*` | gateway | 5 / 10 per 60 s | Fixed windows for checkout and sign-in starts (`PermitLimit`, `WindowSeconds`) |
+| `OutputCaching:CatalogSeconds` | gateway | `60` | How long catalog reads are cached at the gateway |
 | `Identity:ClientId` / `Identity:ClientSecret` | gateway | `storefront-bff` / dev secret | The BFF's confidential client; override the secret outside development |
 | `ConnectionStrings:catalogdb` | Catalog.API | *(unset → in-memory)* | Npgsql connection string for the catalog database |
 | `ConnectionStrings:orderingdb` | Ordering.API | *(unset → in-memory)* | Npgsql connection string for the ordering database |
@@ -264,6 +265,12 @@ The browser didn't send back the OIDC correlation cookie. Make sure the dev prox
 <summary><b>Requests fail with 429 "Too many requests"</b></summary>
 
 The gateway's rate limiter kicked in; the response's `Retry-After` header says when to retry. Load tests and scripts hit the anonymous per-IP budget quickly. Raise the limits for local work, e.g. `RateLimiting__Anonymous__TokenLimit=1000`, or call a service directly on its own port, which bypasses the gateway.
+</details>
+
+<details>
+<summary><b>The catalog shows old data after editing the database directly</b></summary>
+
+The gateway caches catalog reads for `OutputCaching:CatalogSeconds` (60 s by default). Edits made through the API clear the cache at once; edits made in PostgreSQL or by calling Catalog.API on its own port don't. Wait for the entries to expire, restart the gateway, or lower the duration, e.g. `OutputCaching__CatalogSeconds=1`.
 </details>
 
 <details>

@@ -372,6 +372,19 @@ The gateway applies ASP.NET Core's built-in rate limiter before anything is prox
 - **Tuning** happens under `RateLimiting` in the gateway's configuration (`Anonymous`, `Authenticated`, `Checkout`, `Login`), e.g. `RateLimiting__Checkout__PermitLimit=10`.
 - **Observability:** the `Microsoft.AspNetCore.RateLimiting` meter is exported through OpenTelemetry, so active leases and rejected requests appear in the Aspire dashboard's metrics.
 
+### Output caching
+
+Catalog reads are the hottest, least personal traffic, so the gateway answers repeats itself with ASP.NET Core output caching ([`OutputCaching.cs`](../src/ApiGateways/ApiGateway/OutputCaching.cs)).
+
+- **Opt-in per route in configuration:** the `catalog` YARP route carries `"OutputCachePolicy": "catalog"`. Basket and ordering are per-user and never cached.
+- **What is stored:** `GET` responses with status `200` and no `Set-Cookie`, for 60 seconds by default, keyed by path and the full query string (`?page=2&category=Books` is its own entry). Errors and `404`s always reach Catalog.
+- **Shared across users:** the framework's default policy skips signed-in users. The catalog is the same for everyone, so this policy doesn't. A response that refreshes the session cookie is never stored, so one user's cookie can't be replayed to another.
+- **Stampede protection:** concurrent misses for the same key wait for one downstream call instead of all hitting Catalog.
+- **Invalidation:** the policy tags its entries with its own name. A YARP response transform evicts that tag after a successful `POST`/`PUT`/`PATCH`/`DELETE` through the same route, before the response returns, so an admin sees their change on the next read. Rejected writes (`4xx`/`5xx`) keep the cache.
+- **Where it sits:** after the rate limiter and the CSRF check, so cache hits still count against a caller's budget and still need `X-CSRF`.
+- **Limits:** the cache is in memory per gateway instance. Changes that bypass the gateway, or reach a different replica, show up when entries expire. Running several replicas would call for a shared store such as Redis (`AddStackExchangeRedisOutputCache`), which makes eviction cluster-wide.
+- **Tuning:** `OutputCaching__CatalogSeconds=300`. Cached responses carry an `Age` header.
+
 ### Keycloak realm
 
 [`deploy/keycloak/storefront-realm.json`](../deploy/keycloak/storefront-realm.json) is imported by Aspire (`WithRealmImport`), Docker Compose (`--import-realm`) and the Testcontainers tests:
@@ -457,6 +470,7 @@ Because OpenTelemetry propagates W3C trace context through the gateway, every `H
 | **Tracing and metrics** | OpenTelemetry instrumentation for ASP.NET Core (excluding `/health`), HttpClient and the .NET runtime |
 | **Export** | OTLP, enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (Aspire and Compose set it; tests don't) |
 | **Rate limiting** | Gateway-wide token buckets per user / IP, stricter checkout and sign-in policies, `429` + `Retry-After` |
+| **Output caching** | Catalog reads cached at the gateway, shared across users, evicted on successful catalog writes |
 | **Container security** | Chiseled images: no shell, no package manager, non-root user |
 
 ## Design decisions
@@ -541,6 +555,7 @@ One origin means no CORS, a first-party session cookie, a single place for sign-
 | Service isolation | `ConfigureTestServices` with fake typed clients | Basket logic without running Catalog or Ordering |
 | Persistence | Testcontainers (PostgreSQL 18, Redis 8) | Migrations and seeding, SQL filtering and paging, `ILIKE` escaping, data surviving an app restart, Redis TTL and case-insensitive keys |
 | Gateway rate limiting | `WebApplicationFactory` with tiny limits from configuration | `429` with `Retry-After` and ProblemDetails, separate budgets per client IP, `/health` exempt, checkout's stricter route policy, user vs IP partition keys |
+| Gateway output caching | `WebApplicationFactory` with a counting fake `IForwarderHttpClientFactory` | Repeat reads served without a downstream call (`Age` header), one entry per query string, `404`s and uncached routes always proxied, eviction after a successful write but not after a rejected one |
 | Authorization rules | Test authentication handler (`X-Test-User` / `X-Test-Roles`) | 401 for anonymous calls, 403 for non-admins, per-user basket and order isolation, admin access to any order |
 | Real tokens | Testcontainers (Keycloak 26 with the project realm) | Signature, issuer and audience validation, realm-role mapping (admin vs customer), tampered tokens rejected |
 | BFF sign-in (end to end) | Keycloak container + the real gateway + an echo backend | `/bff/login` → Keycloak login form → `/signin-oidc` → HttpOnly session → `/bff/user` roles → access token relayed with the right audience → logout ends the SSO session |

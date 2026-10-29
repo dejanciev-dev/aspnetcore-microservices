@@ -62,6 +62,10 @@ Content-Type: application/problem+json
 { "title": "Too many requests", "status": 429, "detail": "Try again in 42 seconds." }
 ```
 
+### Caching (gateway)
+
+Successful `GET /api/products/**` responses are cached by the gateway for 60 seconds per path and query string, for all callers. A response served from the cache carries an `Age` header. Any successful `POST`, `PUT` or `DELETE` on `/api/products` through the gateway clears the catalog cache immediately.
+
 ---
 
 ## Catalog
