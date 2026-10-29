@@ -127,6 +127,18 @@ jobs:
             echo "::error title=Bicep::$(sed 's/%/%25/g' bicep.log | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
+      - name: Validate azure.yaml against the azd schema
+        run: |
+          pip install --quiet jsonschema pyyaml
+          curl -fsSL -o azure.schema.json https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+          python3 - <<'EOF'
+          import json, yaml, jsonschema
+          schema = json.load(open("azure.schema.json"))
+          errors = list(jsonschema.validators.validator_for(schema)(schema).iter_errors(yaml.safe_load(open("azure.yaml"))))
+          for e in errors:
+              print(f"::error title=azure.yaml::{'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}")
+          raise SystemExit(1 if errors else 0)
+          EOF
 
   kubernetes:
     name: Kubernetes (kind) end-to-end
