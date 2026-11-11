@@ -147,6 +147,7 @@ All settings use standard ASP.NET Core configuration, so any value can be overri
 | `Services:Ordering` | Basket.API | `http://localhost:5103` | Base URL used to create orders on checkout |
 | `ReverseProxy:Clusters:{name}:Destinations:d1:Address` | ApiGateway | `http://localhost:510x` | Where each YARP cluster forwards to |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | all .NET services | *(unset)* | Enables OTLP export of logs, metrics and traces |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | all .NET services | *(unset)* | Enables export of logs, metrics and traces to Application Insights (set on Container Apps) |
 | `OTEL_SERVICE_NAME` | all .NET services | assembly name | Service name shown in traces |
 | `GATEWAY_URL` | Angular dev server | `http://localhost:5100` | Target of the `/api` dev proxy ([`proxy.conf.mjs`](../src/Web/storefront/proxy.conf.mjs)) |
 

@@ -93,7 +93,8 @@ Internet ──HTTPS──▶ storefront (nginx) ──▶ api-gateway ──▶
 | Resource | Notes |
 |---|---|
 | Resource group `rg-<env>` | everything below |
-| Container Apps environment | VNet-integrated (TCP ingress needs it), Consumption workload profile, logs to Log Analytics |
+| Container Apps environment | VNet-integrated (TCP ingress needs it), Consumption workload profile, console logs to Log Analytics |
+| Application Insights | workspace-based on the same Log Analytics workspace; receives traces, metrics and logs from the four .NET apps (see [Telemetry](#telemetry)) |
 | Container registry (Basic) | images built in the cloud (`remoteBuild`), pulled by a user-assigned managed identity with `AcrPull` |
 | PostgreSQL Flexible Server (B1ms, v16) | databases `catalogdb`, `orderingdb`, `keycloak`; TLS required; reachable from Azure only |
 | Container apps | `storefront` and `keycloak` with public HTTPS ingress; `api-gateway`, the three services, `redis` and `rabbitmq` internal only; up to three replicas each for the gateway, the services and the storefront |
@@ -115,6 +116,15 @@ azd up          # a second run attaches the health probes to the deployed images
 `azd up` prints `STOREFRONT_URL` and `KEYCLOAK_URL`. Later code changes need only `azd deploy` (or `azd deploy <service>`). `azd down --purge` deletes everything.
 
 The four secure parameters are the PostgreSQL admin password (it must meet Azure's complexity rules), the RabbitMQ password, the Keycloak admin password and the BFF client secret. `azd` stores them in the environment's local configuration under `.azure/`, which is git-ignored.
+
+### Telemetry
+
+The gateway and the three services export traces, metrics and logs to Application Insights through the [Azure Monitor OpenTelemetry distro](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable?tabs=aspnetcore). The service defaults switch it on when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the same way `OTEL_EXPORTER_OTLP_ENDPOINT` switches on OTLP in the other run modes. The same instrumentation is exported in both cases: HTTP in and out, SQL, Redis, RabbitMQ publish and process spans, runtime and rate-limiter metrics. Health probes are left out of traces.
+
+- **Cloud role names** come from `OTEL_SERVICE_NAME` (`api-gateway`, `catalog-api`, `basket-api`, `ordering-api`), so the Application map shows one node per app, with the RabbitMQ hops joining traces across them.
+- **Where to look:** in the portal, the `appi-<token>` resource in `rg-<env>` (Application map, Transaction search, Live metrics, Failures). The data is stored in the Log Analytics workspace as `AppRequests`, `AppDependencies`, `AppTraces`, `AppExceptions` and `AppMetrics`, next to `ContainerAppConsoleLogs_CL`.
+- **Not exported:** the storefront (nginx), Keycloak, Redis and RabbitMQ have console logs only. The migration jobs don't get the connection string either; their console logs are enough for a run that lasts seconds.
+- **Cost:** `ILogger` output now reaches the workspace twice, as `AppTraces` and as console logs. If that matters, raise the console log level in the container apps (`Logging__Console__LogLevel__Default=Warning`), or cap the workspace's daily ingestion.
 
 ### Migrations
 
@@ -141,6 +151,5 @@ Running behind a TLS-terminating proxy that routes internal traffic by `Host` ne
 - **Not deployed by CI.** CI compiles and lints the Bicep and validates `azure.yaml` against the azd schema on every push, but nothing deploys the templates automatically. Treat the first `azd up` as the real test.
 - **Probes start on the second provision.** Before the first `azd deploy`, each app runs a placeholder image on the same port (the ASP.NET sample, or hello-world for nginx) without probes, so the first revision is healthy. Once real images exist, the next `azd provision` / `azd up` keeps them and adds the probes.
 - **Redis and RabbitMQ are not durable.** They have no volumes here: a restart loses open baskets and unconsumed messages (orders already written to PostgreSQL are safe), and the gateway's Data Protection keys, which signs everyone out. Azure Managed Redis and Azure Service Bus are the production choices; the latter would need a different messaging transport.
-- **No telemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` isn't set, so only console logs reach Log Analytics. Pointing it at an OpenTelemetry collector or Application Insights is a follow-up.
 - **Demo identities are public.** The realm's demo users (`ada` / `ada` with the admin role, `grace` / `grace`), the `storefront-tests` password-grant client and the localhost redirect URIs come along. Change or remove them in the Keycloak admin console, or keep the deployment private.
 - **Costs.** PostgreSQL B1ms, the registry and the always-on replicas (min 1 per app) incur charges while the environment exists.

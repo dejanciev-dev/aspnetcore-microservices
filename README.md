@@ -117,7 +117,7 @@ flowchart LR
 | **Identity** | Keycloak 26 (realm as code), OpenID Connect + PKCE, BFF pattern, JWT bearer with audience and role checks |
 | **Gateway** | [YARP](https://microsoft.github.io/reverse-proxy/) 2.3 |
 | **Resilience** | `Microsoft.Extensions.Http.Resilience` (Polly v8 standard pipeline) |
-| **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter |
+| **Observability** | OpenTelemetry (ASP.NET Core, HttpClient and runtime instrumentation), OTLP exporter, Azure Monitor distro (Application Insights) |
 | **Orchestration** | .NET Aspire 13 AppHost, Aspire Dashboard |
 | **Front end** | Angular 21, TypeScript 5.9, standalone components, signals, `httpResource`, Signal Forms, SCSS |
 | **Testing** | xUnit v3 on Microsoft.Testing.Platform, `WebApplicationFactory`, **Testcontainers** (real PostgreSQL and Redis), **Pact** contract tests, **Playwright** end-to-end tests, Vitest + Angular TestBed |
