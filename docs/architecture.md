@@ -468,8 +468,8 @@ Because OpenTelemetry propagates W3C trace context through the gateway, every `H
 | **Health** | `/health` runs every check (readiness), `/alive` none (liveness), on every service and the gateway; Aspire uses `/health`, Kubernetes and Container Apps use both, so a dependency outage removes pods from rotation instead of restarting them |
 | **Resilience** | `ConfigureHttpClientDefaults(h => h.AddStandardResilienceHandler())` |
 | **Logging** | `ILogger` with message templates; exported through OpenTelemetry |
-| **Tracing and metrics** | OpenTelemetry instrumentation for ASP.NET Core (excluding `/health`), HttpClient and the .NET runtime |
-| **Export** | OTLP, enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (Aspire and Compose set it; tests don't) |
+| **Tracing and metrics** | OpenTelemetry instrumentation for ASP.NET Core (excluding `/health` and `/alive`), HttpClient and the .NET runtime |
+| **Export** | OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (Aspire, Compose, Kubernetes); Application Insights through the Azure Monitor distro when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set (Container Apps). Tests set neither, so nothing is exported |
 | **Rate limiting** | Gateway-wide token buckets per user / IP, stricter checkout and sign-in policies, `429` + `Retry-After` |
 | **Output caching** | Catalog reads cached at the gateway, shared across users, evicted on successful catalog writes |
 | **Container security** | Chiseled images: no shell, no package manager, non-root user |
