@@ -6,6 +6,8 @@
 // Only the storefront and Keycloak are public. The services reach each other by app name inside
 // the environment (VNet-integrated, which TCP ingress for Redis and RabbitMQ requires).
 // PostgreSQL is a managed Flexible Server; Redis and RabbitMQ run as container apps.
+// The .NET services send traces, metrics and logs to Application Insights, which stores them in
+// the same Log Analytics workspace as the console logs.
 
 param location string
 param tags object
@@ -44,6 +46,18 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   properties: {
     sku: { name: 'PerGB2018' }
     retentionInDays: 30
+  }
+}
+
+// Workspace-based: telemetry lands in the workspace above, with its retention and billing.
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-${resourceToken}'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
   }
 }
 
@@ -166,8 +180,11 @@ var dotnetProbes = [
   { type: 'Readiness', httpGet: { path: '/health', port: 8080 }, periodSeconds: 5 }
 ]
 
+// Each service adds OTEL_SERVICE_NAME, which Application Insights shows as its cloud role name.
+// The connection string only allows sending telemetry, so it is not kept as a secret.
 var commonServiceEnv = [
   { name: 'Identity__Authority', value: authority }
+  { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
 ]
 
 module redis 'modules/container-app.bicep' = {
@@ -299,6 +316,7 @@ module catalogApi 'modules/container-app.bicep' = {
       ]
     }
     env: concat(commonServiceEnv, [
+      { name: 'OTEL_SERVICE_NAME', value: 'catalog-api' }
       { name: 'Database__MigrateOnStartup', value: 'false' }
       { name: 'ConnectionStrings__catalogdb', secretRef: 'catalogdb' }
       { name: 'ConnectionStrings__rabbitmq', secretRef: 'rabbitmq' }
@@ -351,6 +369,7 @@ module orderingApi 'modules/container-app.bicep' = {
       ]
     }
     env: concat(commonServiceEnv, [
+      { name: 'OTEL_SERVICE_NAME', value: 'ordering-api' }
       { name: 'Database__MigrateOnStartup', value: 'false' }
       { name: 'ConnectionStrings__orderingdb', secretRef: 'orderingdb' }
       { name: 'ConnectionStrings__rabbitmq', secretRef: 'rabbitmq' }
@@ -375,6 +394,7 @@ module basketApi 'modules/container-app.bicep' = {
     maxReplicas: 3   // stateless: baskets live in Redis
     secrets: { items: [{ name: 'rabbitmq', value: rabbitmqConnection }] }
     env: concat(commonServiceEnv, [
+      { name: 'OTEL_SERVICE_NAME', value: 'basket-api' }
       { name: 'ConnectionStrings__redis', value: 'redis:6379' }
       { name: 'ConnectionStrings__rabbitmq', secretRef: 'rabbitmq' }
       { name: 'Services__Catalog', value: 'http://catalog-api' }
@@ -400,6 +420,7 @@ module apiGateway 'modules/container-app.bicep' = {
     maxReplicas: 3   // keys and output cache are shared through Redis; rate limits are per replica
     secrets: { items: [{ name: 'bff-client-secret', value: bffClientSecret }] }
     env: concat(commonServiceEnv, [
+      { name: 'OTEL_SERVICE_NAME', value: 'api-gateway' }
       { name: 'Identity__ClientSecret', secretRef: 'bff-client-secret' }
       { name: 'ConnectionStrings__redis', value: 'redis:6379' }   // shared Data Protection keys and output cache
       // Redirect URIs and Secure cookies from the public URL, whatever the proxies forward.
