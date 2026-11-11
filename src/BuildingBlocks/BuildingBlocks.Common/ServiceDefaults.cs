@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
+using OpenTelemetry.Instrumentation.AspNetCore;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
@@ -34,8 +36,10 @@ public static class ServiceDefaults
     }
 
     /// <summary>
-    /// Logs, metrics and distributed traces. Exported over OTLP only when
-    /// OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire and docker-compose set it), so tests stay silent.
+    /// Logs, metrics and distributed traces, exported only where a destination is configured (so
+    /// tests stay silent): over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire, docker-compose,
+    /// Kubernetes), and to Application Insights when APPLICATIONINSIGHTS_CONNECTION_STRING is set
+    /// (Azure Container Apps).
     /// </summary>
     public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
     {
@@ -54,11 +58,23 @@ public static class ServiceDefaults
             .WithTracing(tracing => tracing
                 .AddSource(builder.Environment.ApplicationName)
                 .AddSource("BuildingBlocks.Messaging")   // RabbitMQ publish/process spans
-                .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !IsHealthProbe(ctx.Request.Path))
+                .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation());
+
+        // Probes arrive every few seconds per replica; keep them out of traces. PostConfigure wraps
+        // whatever filter an exporter's own setup put there (the Azure Monitor distro sets one).
+        builder.Services.PostConfigure<AspNetCoreTraceInstrumentationOptions>(options =>
+        {
+            var inner = options.Filter;
+            options.Filter = ctx => !IsHealthProbe(ctx.Request.Path) && (inner?.Invoke(ctx) ?? true);
+        });
 
         if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
+
+        // Azure Monitor distro; it reads the connection string from configuration itself.
+        if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+            builder.Services.AddOpenTelemetry().UseAzureMonitor();
 
         return builder;
     }
